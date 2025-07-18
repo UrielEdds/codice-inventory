@@ -157,6 +157,24 @@ def get_logo_base64():
         print(f"❌ Error cargando logo: {e}")
         return None
 
+# ========== DEFINIR HTML DEL LOGO DE FORMA SEGURA ==========
+
+# Cargar logo
+logo_b64 = get_logo_base64()
+
+# Definir HTML del logo de forma segura
+if logo_b64:
+    LOGO_HTML = f'<img src="data:image/png;base64,{LOGO_HTML}" style="height: 40px; width: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">'
+    LOGO_HEADER = f'<img src="data:image/png;base64,{LOGO_HEADER}" style="height: 50px; width: auto; margin-right: 15px;">'
+    LOGO_SIDEBAR = f'<img src="data:image/png;base64,{LOGO_SIDEBAR}" style="height: 40px; width: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">'
+else:
+    LOGO_HTML = '<div style="color: #2563eb; font-size: 2rem; font-weight: bold;">🏥</div>'
+    LOGO_HEADER = '<div style="color: white; font-size: 3rem; margin-right: 15px;">🏥</div>'
+    LOGO_SIDEBAR = '<div style="color: #2563eb; font-size: 2rem; font-weight: bold;">🏥</div>'
+
+print(f"📷 Logo cargado: {'✅ Sí' if logo_b64 else '❌ No, usando emoji'}")
+
+
 # ========== CONFIGURACIÓN DE PÁGINA ==========
 st.set_page_config(
     page_title="Sistema de Inventario Inteligente",
@@ -406,7 +424,7 @@ with st.sidebar:
     st.markdown(f"""
     <div style="text-align: center; padding: 1.5rem; background: linear-gradient(135deg, #1e293b 0%, #2563eb 100%); border-radius: 12px; margin-bottom: 1.5rem; box-shadow: 0 4px 12px rgba(30, 41, 59, 0.3);">
         <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 12px auto; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
-            <img src="data:image/png;base64,{logo_b64}" style="height: 40px; width: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
+            <img src="data:image/png;base64,{LOGO_SIDEBAR}" style="height: 40px; width: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
         </div>
         <div style="color: white; font-size: 1.2rem; font-weight: 700; letter-spacing: 0.5px;">CÓDICE INVENTORY</div>
         <div style="color: rgba(255,255,255,0.8); font-size: 0.8rem; margin-top: 4px;">Sistema Inteligente</div>
@@ -496,7 +514,7 @@ if logo_b64:
 <div style="background: linear-gradient(135deg, #1e293b 0%, #2563eb 100%); padding: 1rem; border-radius: 12px; margin-bottom: 1.5rem; color: white; text-align: center; box-shadow: 0 6px 15px rgba(30, 41, 59, 0.25); position: relative;">
     <div style="display: flex; align-items: center; justify-content: flex-start; gap: 20px; margin-left: 8px; flex-wrap: wrap;">
         <div style="width: 110px; height: 110px; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 15px rgba(0,0,0,0.2); padding: 8px;">
-            <img src="data:image/png;base64,{logo_b64}" style="height: 85px; width: auto; filter: drop-shadow(0 3px 8px rgba(0,0,0,0.3));">
+            <img src="data:image/png;base64,{LOGO_HEADER}" style="height: 85px; width: auto; filter: drop-shadow(0 3px 8px rgba(0,0,0,0.3));">
         </div>
         <div style="height: 80px; width: 2px; background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.3), rgba(255,255,255,0.8), rgba(255,255,255,0.3), transparent); margin: 0 0.5rem;"></div>
         <div style="text-align: left; flex: 1; margin-left: 15px;">
@@ -1822,7 +1840,7 @@ with col2:
         st.markdown(f"""
         <div style="text-align: center; margin: 2rem 0;">
             <div style="width: 60px; height: 60px; background: white; border-radius: 50%; margin: 0 auto 1rem auto; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
-                <img src="data:image/png;base64,{logo_b64}" style="height: 40px; width: auto;">
+                <img src="data:image/png;base64,{LOGO_FOOTER}" style="height: 40px; width: auto;">
             </div>
             <h3 style="color: #1e293b; margin: 0;">CÓDICE INVENTORY</h3>
             <p style="color: #64748b; margin: 0.5rem 0 0 0;">Sistema de Inventario Inteligente</p>

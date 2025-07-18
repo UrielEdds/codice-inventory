@@ -350,7 +350,7 @@ class FarmaciaAPI:
                 st.error("🚫 Acceso denegado. Sin permisos suficientes.")
                 return None
             else:
-                st.warning(f⚠️ API respondió con código: {response.status_code}")
+                st.warning(f"⚠️ API respondió con código: {response.status_code}")
                 return None
                 
         except requests.exceptions.ConnectionError:

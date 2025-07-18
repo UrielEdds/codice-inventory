@@ -164,9 +164,9 @@ logo_b64 = get_logo_base64()
 
 # Definir HTML del logo de forma segura
 if logo_b64:
-    LOGO_HTML = f'<img src="data:image/png;base64,{LOGO_HTML}" style="height: 40px; width: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">'
-    LOGO_HEADER = f'<img src="data:image/png;base64,{LOGO_HEADER}" style="height: 50px; width: auto; margin-right: 15px;">'
-    LOGO_SIDEBAR = f'<img src="data:image/png;base64,{LOGO_SIDEBAR}" style="height: 40px; width: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">'
+    LOGO_HTML = f'<img src="data:image/png;base64,{logo_b64}" style="height: 40px; width: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">'
+    LOGO_HEADER = f'<img src="data:image/png;base64,{logo_b64}" style="height: 50px; width: auto; margin-right: 15px;">'
+    LOGO_SIDEBAR = f'<img src="data:image/png;base64,{logo_b64}" style="height: 40px; width: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">'
 else:
     LOGO_HTML = '<div style="color: #2563eb; font-size: 2rem; font-weight: bold;">🏥</div>'
     LOGO_HEADER = '<div style="color: white; font-size: 3rem; margin-right: 15px;">🏥</div>'

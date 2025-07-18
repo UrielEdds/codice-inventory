@@ -133,15 +133,29 @@ import base64
 @st.cache_data
 def get_logo_base64():
     """Cargar logo como base64 para embedding"""
+    import os
     try:
-        with open('assets/logo_codice.png', 'rb') as f:
-            logo_bytes = f.read()
-        return base64.b64encode(logo_bytes).decode()
-    except:
+        # Probar múltiples rutas posibles
+        possible_paths = [
+            'assets/logo_codice.png',
+            'frontend/assets/logo_codice.png',
+            './assets/logo_codice.png',
+            os.path.join(os.path.dirname(__file__), 'assets', 'logo_codice.png')
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                with open(path, 'rb') as f:
+                    logo_bytes = f.read()
+                return base64.b64encode(logo_bytes).decode()
+        
+        # Si no encuentra el archivo, retornar None
+        print("❌ Logo no encontrado en ninguna ruta")
         return None
-
-# Cargar logo una vez para toda la aplicación
-logo_b64 = get_logo_base64()
+        
+    except Exception as e:
+        print(f"❌ Error cargando logo: {e}")
+        return None
 
 # ========== CONFIGURACIÓN DE PÁGINA ==========
 st.set_page_config(

@@ -69,3 +69,24 @@ def get_inventario():
     except Exception as e:
         print(f"Error obteniendo inventario: {e}")
         return []
+
+# ========== SQLALCHEMY CONFIGURATION (para autenticación) ==========
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+# URL de conexión de Supabase con la contraseña
+DATABASE_URL = "REMOVED_DATABASE_URL"@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
+
+# Crear engine de SQLAlchemy
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db():
+    """Dependencia para obtener sesión de base de datos (SQLAlchemy)"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

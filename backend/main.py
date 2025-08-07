@@ -2,31 +2,23 @@
 Backend FastAPI para Sistema de Inventario Farmacéutico - MODO HÍBRIDO
 Sistema con fallback automático: intenta datos reales, usa demo si falla
 """
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import requests
 from datetime import datetime, date
 from typing import List, Dict, Optional
 import json
-
-# Importar módulo de recomendaciones inteligentes
-from utils.recomendaciones_inteligentes import RecomendacionesInteligentes
-
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
 import os
 import time
 import logging
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi import Security, HTTPException, Request, Depends
-from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+
+# Importar módulo de recomendaciones inteligentes
+from utils.recomendaciones_inteligentes import RecomendacionesInteligentes
+from auth.routes import router as auth_router
 
 # Cargar variables de entorno
 load_dotenv()
@@ -43,7 +35,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 # Configuración para producción
 PORT = int(os.environ.get("PORT", 8000))
 
@@ -53,12 +44,15 @@ SUPABASE_KEY = "REMOVED_JWT"
 
 # ========== CONFIGURACIÓN FASTAPI ==========
 app = FastAPI(
-    title="Sistema de Inventario Farmacéutico",
-    description="API completa para gestión de inventarios con IA y predicciones",
+    title="Códice Inventory API",
+    description="Sistema de inventario farmacéutico inteligente con autenticación",
     version="1.0.0"
 )
 
-app = FastAPI(title="Códice Inventory API", description="Sistema de inventario farmacéutico inteligente", version="1.0.0")
+from routes import ia_routes
+app.include_router(auth_router)
+app.include_router(ia_routes.router, tags=["IA"])
+
 
 # ========== MIDDLEWARE DE SEGURIDAD (AGREGAR AQUÍ) ==========
 app.add_middleware(
@@ -153,11 +147,13 @@ class LoteCreate(BaseModel):
     medicamento_id: int
     sucursal_id: int
     numero_lote: str
-    cantidad_inicial: int
+    cantidad_recibida: int
     cantidad_actual: int
     fecha_vencimiento: date
-    proveedor: Optional[str] = None
-    precio_compra_lote: Optional[float] = None
+    fecha_recepcion: Optional[date] = None
+    costo_unitario: Optional[float] = None
+    fabricante: Optional[str] = None
+    registro_sanitario: Optional[str] = None
 
 class SucursalCreate(BaseModel):
     nombre: str
@@ -266,44 +262,170 @@ def get_supabase_url(endpoint: str, query: str = ""):
     return f"{base_url}?{query}" if query else base_url
 
 def make_supabase_request(method: str, endpoint: str, data: dict = None, query: str = ""):
-    """Petición híbrida con logs MUY detallados"""
+    """Petición híbrida con logs MUY detallados y manejo mejorado de errores"""
     
     try:
         url = get_supabase_url(endpoint, query)
         print(f"🔍 TRYING: {method} {endpoint} | Query: '{query}' | Full URL: {url}")
         
+        # Log de datos enviados para POST/PATCH
+        if data and method in ["POST", "PATCH"]:
+            print(f"📤 DATA SENT: {data}")
+        
         if method == "GET":
-            response = requests.get(url, headers=headers, timeout=3)
+            response = requests.get(url, headers=headers, timeout=10)
         elif method == "POST":
-            response = requests.post(url, headers=headers, json=data, timeout=3)
+            response = requests.post(url, headers=headers, json=data, timeout=10)
         elif method == "PATCH":
-            response = requests.patch(url, headers=headers, json=data, timeout=3)
+            response = requests.patch(url, headers=headers, json=data, timeout=10)
         elif method == "DELETE":
-            response = requests.delete(url, headers=headers, timeout=3)
+            response = requests.delete(url, headers=headers, timeout=10)
         else:
             raise ValueError(f"Método HTTP no soportado: {method}")
         
         print(f"📊 RESPONSE: {response.status_code} for {endpoint}")
         
-        if response.status_code == 200:
+        # Manejar respuestas exitosas
+        if response.status_code in [200, 201]:
             print(f"✅ DATOS REALES obtenidos para: {endpoint}")
-            return response.json()
+            try:
+                return response.json()
+            except ValueError:
+                print(f"⚠️ Respuesta vacía o no JSON para {endpoint}")
+                return {"success": True}
+        
+        # Manejar errores HTTP con más detalle
         elif response.status_code >= 400:
             print(f"❌ ERROR HTTP {response.status_code} para {endpoint}")
             print(f"📄 Query problemática: {query}")
             print(f"🔗 URL completa: {url}")
-            print(f"💬 Error response: {response.text[:300]}")
-            raise HTTPException(status_code=response.status_code, detail=response.text)
+            
+            # Intentar parsear el error de Supabase
+            try:
+                error_detail = response.json()
+                print(f"💬 Error JSON: {error_detail}")
+                
+                # Extraer mensaje de error específico de Supabase
+                if isinstance(error_detail, dict):
+                    if 'message' in error_detail:
+                        error_message = error_detail['message']
+                    elif 'error' in error_detail:
+                        error_message = error_detail['error']
+                    elif 'details' in error_detail:
+                        error_message = error_detail['details']
+                    else:
+                        error_message = str(error_detail)
+                else:
+                    error_message = str(error_detail)
+                    
+            except ValueError:
+                # Si no es JSON válido, usar el texto plano
+                error_message = response.text[:300]
+                print(f"💬 Error text: {error_message}")
+            
+            # Para errores 422, devolver información específica
+            if response.status_code == 422:
+                print(f"🔍 ERROR 422 DETALLADO:")
+                print(f"   - Endpoint: {endpoint}")
+                print(f"   - Método: {method}")
+                print(f"   - Datos enviados: {data}")
+                print(f"   - Respuesta Supabase: {error_message}")
+                
+                # Retornar None para que el endpoint pueda manejar el error
+                return {
+                    "error": True,
+                    "status_code": 422,
+                    "message": error_message,
+                    "endpoint": endpoint,
+                    "method": method,
+                    "data_sent": data
+                }
+            
+            # Para otros errores, también retornar información detallada
+            return {
+                "error": True,
+                "status_code": response.status_code,
+                "message": error_message,
+                "endpoint": endpoint,
+                "method": method
+            }
             
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.RequestException) as e:
-        print(f"🔄 Conectividad fallida para {endpoint}: DNS/Network error")
+        print(f"🔄 Conectividad fallida para {endpoint}: {str(e)}")
         print(f"📊 Usando datos demo como fallback")
+        return get_demo_data(endpoint, method, query)
     
     except Exception as e:
-        print(f"🔄 Error inesperado para {endpoint}: {str(e)[:100]}...")
+        print(f"🔄 Error inesperado para {endpoint}: {str(e)}")
         print(f"📊 Usando datos demo como fallback")
+        return get_demo_data(endpoint, method, query)
+
+# Función auxiliar para validar datos antes de enviar a Supabase
+def validar_datos_supabase(data: dict, tabla: str) -> dict:
+    """Validar y limpiar datos antes de enviar a Supabase"""
     
-    return get_demo_data(endpoint, method, query)
+    if tabla == "salidas_inventario":
+        # Validaciones específicas para salidas_inventario
+        required_fields = ["sucursal_id", "medicamento_id", "lote_id", "cantidad", "tipo_salida"]
+        
+        # Verificar campos requeridos
+        for field in required_fields:
+            if field not in data or data[field] is None:
+                return {"error": f"Campo requerido faltante: {field}"}
+        
+        # Limpiar y validar tipos de datos
+        cleaned_data = {}
+        
+        try:
+            cleaned_data["sucursal_id"] = int(data["sucursal_id"])
+            cleaned_data["medicamento_id"] = int(data["medicamento_id"])
+            cleaned_data["lote_id"] = int(data["lote_id"])
+            cleaned_data["cantidad"] = int(data["cantidad"])
+            
+            if cleaned_data["cantidad"] <= 0:
+                return {"error": "La cantidad debe ser mayor a 0"}
+                
+        except (ValueError, TypeError) as e:
+            return {"error": f"Error de tipo de dato: {str(e)}"}
+        
+        # Validar tipo_salida
+        tipos_validos = [
+            "Venta", "Transferencia", "Consumo Interno", 
+            "Devolución", "Vencimiento", "Ajuste de Inventario",
+            "Muestra Médica", "Investigación", "Dispensación"
+        ]
+        
+        if data["tipo_salida"] not in tipos_validos:
+            return {"error": f"Tipo de salida inválido. Debe ser uno de: {', '.join(tipos_validos)}"}
+        
+        cleaned_data["tipo_salida"] = str(data["tipo_salida"])
+        
+        # Campos opcionales con valores por defecto
+        cleaned_data["destino"] = str(data.get("destino", ""))
+        cleaned_data["observaciones"] = str(data.get("observaciones", ""))
+        cleaned_data["usuario"] = str(data.get("usuario", "Sistema"))
+        cleaned_data["numero_receta"] = str(data.get("numero_receta", ""))
+        cleaned_data["medico_prescriptor"] = str(data.get("medico_prescriptor", ""))
+        
+        # Validar campos numéricos opcionales
+        try:
+            cleaned_data["precio_unitario"] = float(data.get("precio_unitario", 0.0))
+            cleaned_data["total"] = float(data.get("total", 0.0))
+        except (ValueError, TypeError):
+            cleaned_data["precio_unitario"] = 0.0
+            cleaned_data["total"] = 0.0
+        
+        # Agregar timestamp si no existe
+        if "fecha_salida" not in data:
+            from datetime import datetime
+            cleaned_data["fecha_salida"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            cleaned_data["fecha_salida"] = data["fecha_salida"]
+        
+        return cleaned_data
+    
+    # Para otras tablas, retornar datos sin cambios por ahora
+    return data
 
 # ========== ENDPOINTS DE SALUD ==========
 
@@ -482,12 +604,77 @@ async def get_lotes():
     return make_supabase_request("GET", "lotes_inventario", query="order=fecha_vencimiento")
 
 @app.post("/lotes")
-async def create_lote(lote: LoteCreate):
-    """Crear nuevo lote"""
-    lote_data = lote.dict()
-    lote_data['fecha_vencimiento'] = lote_data['fecha_vencimiento'].isoformat()
-    return make_supabase_request("POST", "lotes_inventario", lote_data)
-
+async def create_lote(request: Request):
+    """Crear nuevo lote con debug completo"""
+    try:
+        # Obtener datos raw del request
+        body = await request.body()
+        json_data = json.loads(body)
+        
+        print(f"🔍 DATOS RECIBIDOS EN /lotes: {json_data}")
+        
+        # Validar campos uno por uno
+        required_fields = ['medicamento_id', 'sucursal_id', 'numero_lote', 'cantidad_recibida', 'cantidad_actual', 'fecha_vencimiento']
+        missing_fields = [field for field in required_fields if field not in json_data]
+        
+        if missing_fields:
+            print(f"❌ CAMPOS FALTANTES: {missing_fields}")
+            raise HTTPException(status_code=422, detail=f"Campos faltantes: {missing_fields}")
+        
+        # Verificar tipos de datos
+        try:
+            medicamento_id = int(json_data['medicamento_id'])
+            sucursal_id = int(json_data['sucursal_id'])
+            cantidad_recibida = int(json_data['cantidad_recibida'])
+            cantidad_actual = int(json_data['cantidad_actual'])
+        except (ValueError, TypeError) as e:
+            print(f"❌ ERROR DE TIPOS: {str(e)}")
+            raise HTTPException(status_code=422, detail=f"Error en tipos de datos: {str(e)}")
+        
+        # Convertir fecha si es string
+        if isinstance(json_data['fecha_vencimiento'], str):
+            try:
+                fecha_vencimiento = datetime.strptime(json_data['fecha_vencimiento'], '%Y-%m-%d').date()
+            except ValueError:
+                print(f"❌ ERROR EN FECHA: {json_data['fecha_vencimiento']}")
+                raise HTTPException(status_code=422, detail="Formato de fecha incorrecto")
+        else:
+            fecha_vencimiento = json_data['fecha_vencimiento']
+        
+        # Preparar datos para Supabase (solo campos que existen en la tabla)
+        lote_data = {
+            "medicamento_id": medicamento_id,
+            "sucursal_id": sucursal_id,
+            "numero_lote": json_data['numero_lote'],
+            "cantidad_recibida": cantidad_recibida,
+            "cantidad_actual": cantidad_actual,
+            "fecha_vencimiento": fecha_vencimiento.isoformat() if hasattr(fecha_vencimiento, 'isoformat') else str(fecha_vencimiento),
+            "fecha_recepcion": json_data.get('fecha_recepcion', datetime.now().date().isoformat()),
+            "costo_unitario": float(json_data.get('costo_unitario', 0.0)),
+            "fabricante": json_data.get('fabricante', ''),
+            "registro_sanitario": json_data.get('registro_sanitario', '')
+        }
+        
+        print(f"📤 ENVIANDO A SUPABASE: {lote_data}")
+        
+        # Enviar a Supabase
+        resultado = make_supabase_request("POST", "lotes_inventario", lote_data)
+        
+        if resultado:
+            print(f"✅ LOTE CREADO EXITOSAMENTE: {resultado}")
+            return resultado
+        else:
+            print(f"❌ ERROR EN SUPABASE")
+            raise HTTPException(status_code=500, detail="Error creando lote en base de datos")
+            
+    except json.JSONDecodeError as e:
+        print(f"❌ ERROR JSON: {str(e)}")
+        raise HTTPException(status_code=422, detail=f"JSON inválido: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ ERROR GENERAL: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 # ========== ENDPOINTS DE INTELIGENCIA ARTIFICIAL ==========
 
 @app.get("/inteligente/recomendaciones/compras/sucursal/{sucursal_id}")
@@ -863,34 +1050,116 @@ async def get_metricas_sucursal(sucursal_id: int):
         }
 
 @app.post("/salidas/lote")
-async def procesar_multiples_salidas(salidas_data: list):
-    """Procesar múltiples salidas en una transacción"""
+async def procesar_multiples_salidas(request: Request):
+    """Procesar múltiples salidas con debug detallado"""
     try:
+        # Obtener body raw
+        body = await request.body()
+        print(f"📥 BODY RAW: {body[:200]}...")  # Primeros 200 chars
+        
+        # Parsear JSON
+        salidas_data = await request.json()
+        print(f"📥 DATOS PARSEADOS: {type(salidas_data)}")
+        print(f"📥 CANTIDAD DE SALIDAS: {len(salidas_data) if isinstance(salidas_data, list) else 'No es lista'}")
+        
+        if not isinstance(salidas_data, list):
+            return {"error": "Se esperaba una lista", "tipo_recibido": type(salidas_data).__name__}
+        
         resultados = []
         errores = []
         
-        for salida in salidas_data:
+        for i, salida in enumerate(salidas_data):
             try:
-                # Procesar cada salida individualmente
+                print(f"\n🔍 === PROCESANDO SALIDA {i} ===")
+                print(f"📋 Datos de salida: {salida}")
+                print(f"📋 Tipo: {type(salida)}")
+                
+                # Verificar campos requeridos
+                campos_requeridos = ['sucursal_id', 'medicamento_id', 'lote_id', 'numero_lote', 'cantidad', 'tipo_salida']
+                for campo in campos_requeridos:
+                    if campo not in salida:
+                        print(f"❌ FALTA CAMPO REQUERIDO: {campo}")
+                    else:
+                        print(f"✅ {campo}: {salida[campo]} (tipo: {type(salida[campo])})")
+                
+                # Verificar claves foráneas
+                print(f"\n🔑 Verificando claves foráneas:")
+                
+                # Verificar sucursal
+                suc_check = make_supabase_request("GET", "sucursales", query=f"id=eq.{salida.get('sucursal_id')}")
+                print(f"  - Sucursal {salida.get('sucursal_id')}: {'✅ Existe' if suc_check else '❌ NO EXISTE'}")
+                
+                # Verificar medicamento
+                med_check = make_supabase_request("GET", "medicamentos", query=f"id=eq.{salida.get('medicamento_id')}")
+                print(f"  - Medicamento {salida.get('medicamento_id')}: {'✅ Existe' if med_check else '❌ NO EXISTE'}")
+                
+                # Verificar lote
+                lote_check = make_supabase_request("GET", "lotes_inventario", query=f"id=eq.{salida.get('lote_id')}")
+                print(f"  - Lote {salida.get('lote_id')}: {'✅ Existe' if lote_check else '❌ NO EXISTE'}")
+                
+                # Procesar salida
                 resultado = await crear_salida(salida)
                 resultados.append(resultado)
+                print(f"✅ Salida {i} procesada exitosamente")
                 
             except Exception as e:
+                print(f"❌ ERROR en salida {i}: {str(e)}")
+                print(f"❌ Tipo de error: {type(e).__name__}")
+                import traceback
+                print(f"❌ Traceback: {traceback.format_exc()}")
+                
                 errores.append({
                     "salida": salida,
-                    "error": str(e)
+                    "error": str(e),
+                    "tipo": type(e).__name__
                 })
         
-        return {
+        respuesta = {
             "exitos": len(resultados),
             "errores": len(errores),
             "resultados": resultados,
             "errores_detalle": errores
         }
         
+        print(f"\n📊 RESUMEN FINAL: {respuesta}")
+        return respuesta
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ Error parseando JSON: {e}")
+        return {"error": "JSON inválido", "detalle": str(e)}
     except Exception as e:
-        print(f"❌ Error procesando salidas múltiples: {e}")
+        print(f"❌ Error general: {e}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error procesando salidas: {str(e)}")
+
+@app.post("/test-insercion-salida")
+async def test_insercion_salida():
+    """Test directo de inserción"""
+    # Datos mínimos requeridos
+    test_data = {
+        "sucursal_id": 1,
+        "medicamento_id": 1,
+        "lote_id": 1,
+        "numero_lote": "TEST-001",
+        "cantidad": 1,
+        "tipo_salida": "Venta",
+        "precio_unitario": 10.0,
+        "total": 10.0
+    }
+    
+    print(f"🧪 Intentando insertar datos de prueba: {test_data}")
+    
+    try:
+        resultado = make_supabase_request("POST", "salidas_inventario", data=test_data)
+        return {"success": True, "resultado": resultado}
+    except Exception as e:
+        return {"success": False, "error": str(e), "datos_enviados": test_data}
+
+@app.post("/salidas/debug")
+async def debug_salida_data(data: dict):
+    print(f"Datos recibidos: {data}")
+    return {"received": data}
 
 if __name__ == "__main__":
     import uvicorn

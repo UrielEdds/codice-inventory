@@ -138,6 +138,23 @@ def clear_all_cache():
     get_metricas_sucursal_cached.clear()
     print("🧹 Todo el cache limpiado")
 
+# ========== FUNCIÓN INVENTARIO_DATA ==========
+def get_inventario_data_for_user(user_role, current_user, selected_sucursal_id, api):
+    """
+    Función auxiliar para obtener inventario_data según el rol del usuario
+    """
+    if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
+        # Usuarios no-admin solo ven su sucursal
+        inventario_data = api._make_request(f"/inventario/sucursal/{current_user['sucursal_id']}")
+    elif selected_sucursal_id > 0:
+        # Sucursal específica seleccionada
+        inventario_data = api._make_request(f"/inventario/sucursal/{selected_sucursal_id}")
+    else:
+        # Todas las sucursales
+        inventario_data = api._make_request("/inventario")
+    
+    return inventario_data if inventario_data else []
+
 # ========== FUNCIÓN GLOBAL PARA LOGO ==========
 import base64
 
@@ -1324,28 +1341,23 @@ if tab_mapping[2] is not None:  # Si la pestaña está disponible
                     options=["Por Sucursal", "Por Categoría", "Por Valor", "Por Rotación"] if user_role in ["admin", "gerente"] else ["Por Categoría", "Por Valor"]
                 )
             
-            # Obtener datos según permisos del usuario
+            # Obtener datos usando la función auxiliar
+            inventario_data = get_inventario_data_for_user(user_role, current_user, selected_sucursal_id, api)
+            
+            if not inventario_data:
+                st.error("❌ No se pudieron cargar los datos para análisis")
+                st.stop()
+            
+            # Crear DataFrames según el rol
             if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
-                # Usuarios no-admin: análisis de su sucursal vs promedios del sistema
-                inventario_usuario = api._make_request(f"/inventario/sucursal/{current_user['sucursal_id']}")
-                inventario_sistema = api._make_request("/inventario")  # Para comparaciones
-                
-                if inventario_usuario and inventario_sistema:
-                    df_usuario = pd.DataFrame(inventario_usuario)
-                    df_sistema = pd.DataFrame(inventario_sistema)
-                else:
-                    st.error("❌ No se pudieron cargar los datos para análisis")
-                    st.stop()
+                # Para usuarios no-admin, también cargar datos del sistema para comparación
+                inventario_sistema = api._make_request("/inventario")
+                df_usuario = pd.DataFrame(inventario_data)
+                df_sistema = pd.DataFrame(inventario_sistema) if inventario_sistema else pd.DataFrame()
+                df_analisis = df_usuario
             else:
-                # Administradores: análisis completo del sistema
-                if selected_sucursal_id > 0:
-                    inventario_data = api._make_request(f"/inventario/sucursal/{selected_sucursal_id}")
-                else:
-                    inventario_data = api._make_request("/inventario")
-                
-                if not inventario_data:
-                    st.error("❌ No se pudieron cargar los datos para análisis")
-                    st.stop()
+                # Para admin o vista consolidada
+                df_analisis = pd.DataFrame(inventario_data)
             
             # Realizar análisis según el tipo seleccionado
             if user_role in ["admin"] or (user_role == "gerente" and selected_sucursal_id == 0):
@@ -1784,7 +1796,6 @@ if tab_mapping[2] is not None:  # Si la pestaña está disponible
                         st.error(f"❌ Error al generar el reporte: {str(e)}")
                         st.info("💡 Intenta seleccionar un tipo de análisis diferente o contacta al administrador")
 
-
 # ========== TAB 4: IA & PREDICCIONES CON PERMISOS ==========
 if tab_mapping[3] is not None:  # Si la pestaña está disponible
     with tab_mapping[3]:
@@ -1793,6 +1804,21 @@ if tab_mapping[3] is not None:  # Si la pestaña está disponible
             st.error("🚫 No tienes permisos para acceder a las funciones de IA")
         else:
             st.header("🤖 Dashboard Inteligente Multi-Sucursal")
+            
+            # ========== CARGAR DATOS NECESARIOS PARA IA ==========
+            # Cargar inventario_data ANTES de crear los sub-tabs
+            if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
+                inventario_endpoint = f"/inventario/sucursal/{current_user['sucursal_id']}"
+            elif selected_sucursal_id > 0:
+                inventario_endpoint = f"/inventario/sucursal/{selected_sucursal_id}"
+            else:
+                inventario_endpoint = "/inventario"
+            
+            inventario_data = api._make_request(inventario_endpoint)
+            
+            if not inventario_data:
+                inventario_data = []
+                st.warning("⚠️ No se pudieron cargar datos de inventario para el análisis de IA")
             
             # Mostrar funcionalidades según rol
             if user_role == "admin":
@@ -1817,410 +1843,410 @@ if tab_mapping[3] is not None:  # Si la pestaña está disponible
                 tab_ia1, tab_ia2 = st.tabs(ia_tabs)
                 tab_ia3 = tab_ia4 = tab_ia5 = None
             
-            # ========== RESUMEN EJECUTIVO IA  ==========
-with tab_ia1:
-    st.subheader("📊 Resumen Ejecutivo Inteligente")
-    
-    # Filtrar datos según permisos del usuario
-    if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
-        sucursal_filter = current_user["sucursal_id"]
-        st.info(f"📍 Análisis para tu sucursal: {current_user.get('sucursal_nombre', 'N/A')}")
-    else:
-        sucursal_filter = selected_sucursal_id
-    
-    with st.spinner("🧠 Generando análisis inteligente..."):
-        # Agregar timestamp para evitar cache
-        import time
-        timestamp = int(time.time())
-        
-        # CORRECCIÓN: Verificar que el endpoint existe antes de llamarlo
-        try:
-            if sucursal_filter > 0:
-                # Verificar primero si el endpoint específico existe
-                dashboard_data = api._make_request(f"/inteligente/dashboard/sucursal/{sucursal_filter}?_t={timestamp}")
+            # ========== RESUMEN EJECUTIVO IA ==========
+            with tab_ia1:
+                st.subheader("📊 Resumen Ejecutivo Inteligente")
                 
-                # Si falla, intentar con el endpoint consolidado
-                if not dashboard_data:
-                    st.warning(f"⚠️ No hay datos específicos para sucursal {sucursal_filter}, mostrando datos consolidados")
-                    dashboard_data = api._make_request(f"/inteligente/dashboard/consolidado?_t={timestamp}")
-            else:
-                dashboard_data = api._make_request(f"/inteligente/dashboard/consolidado?_t={timestamp}")
-            
-            # Si aún no hay datos, usar datos de fallback
-            if not dashboard_data:
-                st.warning("⚠️ No se pudieron cargar datos del servidor, mostrando datos de demostración")
-                
-                # Datos de fallback para evitar el error 404
-                dashboard_data = {
-                    'status': 'fallback',
-                    'metricas_globales': {
-                        'inversion_total_recomendada': 25000.0 if user_role == "admin" else 8500.0,
-                        'valor_total_en_riesgo': 12000.0,
-                        'ahorro_redistribucion': 3500.0,
-                        'precision_ia': 87.5,
-                        'total_sucursales_analizadas': 3 if user_role == "admin" else 1,
-                        'alertas_ia_activas': 8,
-                        'productos_analizados': 156
-                    }
-                }
-                
-                st.info("📊 Mostrando datos de demostración mientras se solucionan los problemas de conexión")
-        
-        except Exception as e:
-            st.error(f"❌ Error conectando con el módulo de IA: {str(e)}")
-            
-            # Mostrar datos de fallback en caso de error
-            dashboard_data = {
-                'status': 'error_fallback',
-                'metricas_globales': {
-                    'inversion_total_recomendada': 25000.0 if user_role == "admin" else 8500.0,
-                    'valor_total_en_riesgo': 12000.0,
-                    'ahorro_redistribucion': 3500.0,
-                    'precision_ia': 85.0,
-                    'total_sucursales_analizadas': 3 if user_role == "admin" else 1,
-                    'alertas_ia_activas': 12,
-                    'productos_analizados': 145
-                }
-            }
-            
-            if user_role == "admin":
-                st.error(f"🔧 Detalle técnico para admin: {str(e)}")
-            
-            st.info("🔄 Verifica la conexión con el módulo de IA o contacta al administrador")
-        
-        # Procesar los datos (el resto del código sigue igual)
-        if dashboard_data and 'metricas_globales' in dashboard_data:
-            metricas = dashboard_data['metricas_globales']
-            
-            # Mostrar indicador de estado de los datos
-            if dashboard_data.get('status') in ['fallback', 'error_fallback']:
-                st.warning("📊 **Modo Demostración** - Datos mostrados son de ejemplo")
-            
-            # Métricas personalizadas según rol (código existente)
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                inversion = metricas.get('inversion_total_recomendada', 0)
-                
-                if user_role in ["admin", "gerente"]:
-                    st.metric(
-                        "💰 Inversión Recomendada", 
-                        format_currency(inversion),
-                        help="Total recomendado para compras"
-                    )
+                # Filtrar datos según permisos del usuario
+                if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
+                    sucursal_filter = current_user["sucursal_id"]
+                    st.info(f"📍 Análisis para tu sucursal: {current_user.get('sucursal_nombre', 'N/A')}")
                 else:
-                    st.metric(
-                        "📊 Productos Analizados", 
-                        metricas.get('productos_analizados', 45),
-                        help="Medicamentos incluidos en el análisis"
-                    )
-            
-            with col2:
-                valor_riesgo = metricas.get('valor_total_en_riesgo', 0)
-                st.metric(
-                    "⚠️ Valor en Riesgo", 
-                    format_currency(valor_riesgo),
-                    help="Valor de inventario próximo a vencer"
-                )
-            
-            with col3:
-                if user_role in ["admin", "gerente"]:
-                    st.metric(
-                        "🔄 Ahorro Redistribución", 
-                        format_currency(metricas.get('ahorro_redistribucion', 4200.0)),
-                        help="Ahorro potencial redistribuyendo entre sucursales"
-                    )
-                else:
-                    st.metric(
-                        "🎯 Precisión IA", 
-                        f"{metricas.get('precision_ia', 87.5):.1f}%",
-                        help="Precisión de las predicciones del modelo"
-                    )
-            
-            with col4:
-                if user_role == "admin":
-                    sucursales = metricas.get('total_sucursales_analizadas', 3)
-                    st.metric(
-                        "🏥 Sucursales Analizadas", 
-                        sucursales,
-                        help="Número de sucursales incluidas en el análisis"
-                    )
-                else:
-                    alertas = metricas.get('alertas_ia_activas', 12)
-                    st.metric(
-                        "🚨 Alertas IA Activas", 
-                        alertas,
-                        help="Alertas generadas por el sistema inteligente"
-                    )
-            
-            st.markdown("---")
-                            
-                # ========== SECCIÓN DE ALERTAS INTELIGENTES ==========
-            st.subheader("🚨 Alertas Inteligentes Prioritarias")
+                    sucursal_filter = selected_sucursal_id
                 
-            col_alert1, col_alert2 = st.columns(2)
-                
-            with col_alert1:
-                    # Simular alertas críticas basadas en la sucursal seleccionada
-                    if sucursal_filter == 1:  # UMF 15 Centro (o sucursal ID 1)
-                        alertas_criticas = [
-                            {"tipo": "STOCK_CRÍTICO", "medicamento": "Paracetamol 500mg", "prioridad": "🔴 URGENTE", "accion": "Reorden inmediato - Stock: 5 unidades"},
-                            {"tipo": "VENCIMIENTO", "medicamento": "Ibuprofeno 400mg", "prioridad": "🟡 MEDIO", "accion": "Vence en 15 días - Rotar inventario"},
-                            {"tipo": "PRECIO_ALTO", "medicamento": "Ciprofloxacino 500mg", "prioridad": "🟠 ATENCIÓN", "accion": "Precio 12% arriba del promedio"},
-                            {"tipo": "DEMANDA_ALTA", "medicamento": "Enalapril 10mg", "prioridad": "🔴 URGENTE", "accion": "Demanda +85% vs mes anterior"}
-                        ]
-                    elif sucursal_filter == 2:  # Otra sucursal
-                        alertas_criticas = [
-                            {"tipo": "REDISTRIBUIR", "medicamento": "Metformina 850mg", "prioridad": "🟡 MEDIO", "accion": "Transferir 75 unidades de Norte"},
-                            {"tipo": "DEMANDA_ALTA", "medicamento": "Enalapril 10mg", "prioridad": "🔴 URGENTE", "accion": "Aumentar pedido 150% para esta semana"},
-                            {"tipo": "OPORTUNIDAD", "medicamento": "Furosemida 40mg", "prioridad": "🟢 BAJO", "accion": "Precio proveedor bajó 8%"}
-                        ]
-                    elif sucursal_filter == 3:  # Sucursal Sur
-                        alertas_criticas = [
-                            {"tipo": "STOCK_CRÍTICO", "medicamento": "Paracetamol 500mg", "prioridad": "🔴 CRÍTICO", "accion": "Stock: 5 unidades - Reorden YA"},
-                            {"tipo": "STOCK_CRÍTICO", "medicamento": "Ibuprofeno 400mg", "prioridad": "🔴 CRÍTICO", "accion": "Stock: 8 unidades - Transferir urgente"},
-                            {"tipo": "MÚLTIPLE", "medicamento": "5 medicamentos", "prioridad": "🔴 EMERGENCIA", "accion": "Stock crítico generalizado"},
-                            {"tipo": "REDISTRIBUIR", "medicamento": "Antibióticos", "prioridad": "🟡 MEDIO", "accion": "Solicitar desde Centro y Norte"}
-                        ]
-                    else:  # Vista consolidada (todas las sucursales)
-                        alertas_criticas = [
-                            {"tipo": "SISTEMA", "medicamento": "Múltiples sucursales", "prioridad": "🟡 INFORMACIÓN", "accion": "Vista consolidada - Selecciona sucursal específica"},
-                            {"tipo": "GLOBAL", "medicamento": "Paracetamol 500mg", "prioridad": "🔴 CRÍTICO", "accion": "Stock bajo en 2 de 3 sucursales"},
-                            {"tipo": "REDISTRIBUCIÓN", "medicamento": "Sistema general", "prioridad": "🟠 OPORTUNIDAD", "accion": "12 oportunidades de redistribución"}
-                        ]
+                with st.spinner("🧠 Generando análisis inteligente..."):
+                    # Agregar timestamp para evitar cache
+                    import time
+                    timestamp = int(time.time())
                     
-                    st.markdown("**🔥 Alertas Más Críticas:**")
-                    for i, alerta in enumerate(alertas_criticas[:4], 1):  # Máximo 4 alertas
-                        # Color de borde según prioridad
-                        border_color = "#ef4444" if "🔴" in alerta['prioridad'] else "#f59e0b" if "🟡" in alerta['prioridad'] else "#10b981"
-                        
-                        st.markdown(f"""
-                        <div style="background: linear-gradient(90deg, rgba(100,100,100,0.1) 0%, transparent 100%); 
-                                    border-left: 4px solid {border_color}; 
-                                    padding: 0.8rem; margin: 0.5rem 0; 
-                                    border-radius: 8px;
-                                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
-                                <strong style="color: inherit;">#{i} {alerta['prioridad']} {alerta['tipo']}</strong>
-                                <span style="background: rgba(59, 130, 246, 0.2); padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.8rem; color: #3b82f6;">
-                                    Alerta #{i}
-                                </span>
-                            </div>
-                            <div style="color: #64748b; margin: 0.3rem 0;">
-                                💊 <strong>{alerta['medicamento']}</strong>
-                            </div>
-                            <div style="color: #10b981; font-size: 0.9rem;">
-                                ⚡ {alerta['accion']}
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-            with col_alert2:
-                    st.markdown("**📊 Estado General del Sistema:**")
-                    
-                    # Métricas de salud del sistema con datos dinámicos
-                    precision_ia = metricas.get('precision_ia', 87.5)
-                    total_sucursales = metricas.get('total_sucursales_analizadas', 1)
-                    
-                    sistema_salud = {
-                        "Conectividad": {
-                            "valor": "🟢 Excelente" if precision_ia > 85 else "🟡 Buena", 
-                            "detalle": "99.8% uptime - Sin interrupciones"
-                        },
-                        "Precisión IA": {
-                            "valor": f"🎯 {precision_ia:.1f}%", 
-                            "detalle": "Modelo entrenado con 15K transacciones"
-                        },
-                        "Sincronización": {
-                            "valor": "⚡ Hace 2min", 
-                            "detalle": f"Datos actualizados - {total_sucursales} sucursal(es)"
-                        },
-                        "Rendimiento": {
-                            "valor": "🚀 Óptimo", 
-                            "detalle": "Respuesta: 1.2s | CPU: 23% | RAM: 67%"
-                        },
-                        "Alertas Activas": {
-                            "valor": f"🚨 {len(alertas_criticas)}", 
-                            "detalle": f"Sucursal {sucursal_filter if sucursal_filter > 0 else 'Todas'} monitoreada"
-                        },
-                        "Última Predicción": {
-                            "valor": "🧠 Exitosa", 
-                            "detalle": f"Generadas {metricas.get('productos_analizados', 45)} recomendaciones"
-                        }
-                    }
-                    
-                    for metric, data in sistema_salud.items():
-                        # Color del indicador según el tipo de métrica
-                        if "🟢" in data['valor'] or "🚀" in data['valor'] or "⚡" in data['valor']:
-                            bg_color = "rgba(16, 185, 129, 0.1)"
-                            border_color = "#10b981"
-                            text_color = "#10b981"
-                        elif "🟡" in data['valor']:
-                            bg_color = "rgba(245, 158, 11, 0.1)"
-                            border_color = "#f59e0b"
-                            text_color = "#f59e0b"
-                        elif "🚨" in data['valor']:
-                            bg_color = "rgba(239, 68, 68, 0.1)"
-                            border_color = "#ef4444"
-                            text_color = "#ef4444"
-                        else:
-                            bg_color = "rgba(59, 130, 246, 0.1)"
-                            border_color = "#3b82f6"
-                            text_color = "#3b82f6"
-                        
-                        st.markdown(f"""
-                        <div style="background: {bg_color}; 
-                                    border-left: 3px solid {border_color};
-                                    border-radius: 8px; 
-                                    padding: 0.7rem; 
-                                    margin: 0.4rem 0;
-                                    transition: all 0.3s ease;">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <strong style="color: inherit;">{metric}</strong>
-                                <span style="color: {text_color}; font-weight: 600;">{data['valor']}</span>
-                            </div>
-                            <small style="color: #64748b; margin-top: 0.2rem; display: block;">
-                                {data['detalle']}
-                            </small>
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-            st.markdown("---")
-
-                # ========== ESTADÍSTICAS DETALLADAS DEL SISTEMA ==========
-            st.subheader("📋 Centro de Información Detallada")
-                
-            with st.expander("🔍 Ver Estadísticas Completas del Sistema", expanded=False):
-                    col_stats1, col_stats2, col_stats3 = st.columns(3)
-                    
-                    with col_stats1:
-                        st.markdown("#### 🧠 Modelo de Inteligencia Artificial")
-                        st.markdown(f"""
-<div style="color: white;">
-<strong>Información del Modelo:</strong><br>
-• <strong>Versión:</strong> GPT-Inventory v2.1<br>
-• <strong>Base de entrenamiento:</strong> 15,000 transacciones reales<br>
-• <strong>Precisión promedio:</strong> {precision_ia:.1f}%<br>
-• <strong>Última actualización:</strong> Hace 2 horas<br>
-• <strong>Predicciones generadas hoy:</strong> 156<br>
-• <strong>Tiempo de entrenamiento:</strong> 48 horas<br>
-• <strong>Algoritmo base:</strong> Transformer + Análisis de series temporales<br><br>
-
-<strong>Métricas de Rendimiento:</strong><br>
-• <strong>Accuracy:</strong> {precision_ia:.1f}%<br>
-• <strong>Precisión:</strong> 89.2%<br>
-• <strong>Recall:</strong> 91.7%<br>
-• <strong>F1-Score:</strong> 90.4%
-</div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col_stats2:
-                        st.markdown("#### 📊 Datos de la Sucursal Actual")
-                        
-                        # Datos específicos según la sucursal seleccionada
+                    # CORRECCIÓN: Verificar que el endpoint existe antes de llamarlo
+                    try:
                         if sucursal_filter > 0:
-                            sucursal_info = next((s for s in sucursales_data if s['id'] == sucursal_filter), {})
-                            sucursal_nombre = sucursal_info.get('nombre', f'Sucursal {sucursal_filter}')
+                            # Verificar primero si el endpoint específico existe
+                            dashboard_data = api._make_request(f"/inteligente/dashboard/sucursal/{sucursal_filter}?_t={timestamp}")
+                            
+                            # Si falla, intentar con el endpoint consolidado
+                            if not dashboard_data:
+                                st.warning(f"⚠️ No hay datos específicos para sucursal {sucursal_filter}, mostrando datos consolidados")
+                                dashboard_data = api._make_request(f"/inteligente/dashboard/consolidado?_t={timestamp}")
                         else:
-                            sucursal_nombre = "Vista Consolidada (Todas)"
+                            dashboard_data = api._make_request(f"/inteligente/dashboard/consolidado?_t={timestamp}")
                         
-                        productos_analizados = metricas.get('productos_analizados', 45)
-                        inversion_total = metricas.get('inversion_total_recomendada', 8500)
-                        
-                        st.markdown(f"""
-<div style="color: white;">
-<strong>Información de {sucursal_nombre}:</strong><br>
-• <strong>Medicamentos únicos:</strong> {productos_analizados}<br>
-• <strong>Valor total inventario:</strong> {format_currency(inversion_total * 3.2)}<br>
-• <strong>Rotación promedio:</strong> 2.3x/mes<br>
-• <strong>Eficiencia de stock:</strong> 91.2%<br>
-• <strong>Alertas resueltas hoy:</strong> 8<br>
-• <strong>Tiempo prom. resolución:</strong> 24 minutos<br>
-• <strong>Última actividad:</strong> Hace 5 minutos<br><br>
-
-<strong>Análisis de Tendencias:</strong><br>
-• <strong>Crecimiento mensual:</strong> +12.5%<br>
-• <strong>Reducción desperdicios:</strong> -18.3%<br>
-• <strong>Optimización costos:</strong> +$4,200 MXN/mes<br>
-• <strong>Satisfacción cliente:</strong> 94.7%
-</div>
-                        """, unsafe_allow_html=True)
+                        # Si aún no hay datos, usar datos de fallback
+                        if not dashboard_data:
+                            st.warning("⚠️ No se pudieron cargar datos del servidor, mostrando datos de demostración")
+                            
+                            # Datos de fallback para evitar el error 404
+                            dashboard_data = {
+                                'status': 'fallback',
+                                'metricas_globales': {
+                                    'inversion_total_recomendada': 25000.0 if user_role == "admin" else 8500.0,
+                                    'valor_total_en_riesgo': 12000.0,
+                                    'ahorro_redistribucion': 3500.0,
+                                    'precision_ia': 87.5,
+                                    'total_sucursales_analizadas': 3 if user_role == "admin" else 1,
+                                    'alertas_ia_activas': 8,
+                                    'productos_analizados': 156
+                                }
+                            }
+                            
+                            st.info("📊 Mostrando datos de demostración mientras se solucionan los problemas de conexión")
                     
-                    with col_stats3:
-                        st.markdown("#### ⚡ Rendimiento del Sistema")
-                        st.markdown(f"""
-<div style="color: white;">
-<strong>Métricas de Infraestructura:</strong><br>
-• <strong>Tiempo de respuesta:</strong> 1.2s promedio<br>
-• <strong>Disponibilidad:</strong> 99.8% (SLA: 99.5%)<br>
-• <strong>Requests por minuto:</strong> 45<br>
-• <strong>CPU usage:</strong> 23% (Normal)<br>
-• <strong>Memoria RAM:</strong> 67% (2.1GB/3.2GB)<br>
-• <strong>Almacenamiento:</strong> 78% (156GB/200GB)<br>
-• <strong>Ancho de banda:</strong> 12.5 Mbps utilizado<br><br>
-
-<strong>Estadísticas de Base de Datos:</strong><br>
-• <strong>Conexiones activas:</strong> 12/50<br>
-• <strong>Queries por segundo:</strong> 23.4<br>
-• <strong>Tiempo resp. DB:</strong> 45ms<br>
-• <strong>Cache hit ratio:</strong> 89.2%<br>
-• <strong>Backup más reciente:</strong> Hace 6 horas<br><br>
-
-<strong>Seguridad y Auditoría:</strong><br>
-• <strong>Intentos de login hoy:</strong> 127<br>
-• <strong>Sesiones activas:</strong> 8<br>
-• <strong>Logs de auditoría:</strong> 1,245 entradas<br>
-• <strong>Último scan seguridad:</strong> Hace 12 horas
-</div>
-                        """, unsafe_allow_html=True)
-                
-                # ========== INFORMACIÓN CONTEXTUAL FINAL ==========
-                # Nota informativa final con información de estado
-            status_info = ""
-            if dashboard_data.get('status') in ['fallback', 'error_fallback']:
-                    status_info = "ℹ️ **Modo Demostración Activo:** Algunos datos mostrados son simulados para propósitos de testing y desarrollo."
-            elif sucursal_filter == 0:
-                    status_info = "💡 **Vista Consolidada:** Selecciona una sucursal específica en el panel lateral para ver análisis detallados por ubicación."
-            else:
-                    sucursal_nombre = next((s.get('nombre', f'Sucursal {sucursal_filter}') for s in sucursales_data if s['id'] == sucursal_filter), f'Sucursal {sucursal_filter}')
-                    status_info = f"✅ **Análisis Activo:** Datos en tiempo real para **{sucursal_nombre}** | Última actualización: {datetime.now().strftime('%H:%M:%S')}"
-                
-            if status_info:
-                    st.info(status_info)
-            
-            else:
-                st.error("❌ No se pudieron cargar las métricas inteligentes")
-                if user_role in ["admin", "gerente"]:
-                    st.info("🔧 Verifica la conexión con el módulo de IA o contacta al administrador")
-                    
-                    # Panel de troubleshooting para administradores
-                    with st.expander("🔧 Panel de Diagnóstico (Solo Admin)", expanded=False):
-                        st.markdown("""
-<div style="color: white;">
-<strong>Posibles causas del error:</strong><br>
-1. <strong>Conexión con Supabase:</strong> Verificar conectividad a la base de datos<br>
-2. <strong>Módulo de IA:</strong> El servicio ia_routes.py puede estar inactivo<br>
-3. <strong>Timeout:</strong> La consulta puede estar tardando más de lo esperado<br>
-4. <strong>Permisos:</strong> Verificar que el usuario tenga acceso a datos de IA<br><br>
-
-<strong>Acciones recomendadas:</strong><br>
-• Revisar logs del servidor FastAPI<br>
-• Verificar endpoint: /inteligente/dashboard/sucursal/{sucursal_filter}<br>
-• Comprobar estado de Supabase<br>
-• Reiniciar módulo de recomendaciones inteligentes
-</div>
-                        """, unsafe_allow_html=True)
+                    except Exception as e:
+                        st.error(f"❌ Error conectando con el módulo de IA: {str(e)}")
                         
-                        # Información técnica adicional para debugging
-                        st.code(f"""
-                        DEBUG INFO:
-                        - Sucursal Filter: {sucursal_filter}
-                        - User Role: {user_role}
-                        - Timestamp: {datetime.now().isoformat()}
-                        - Dashboard Data: {dashboard_data}
-                        """)
-                else:
-                    st.info("📞 Contacta al administrador del sistema para resolver este problema")
+                        # Mostrar datos de fallback en caso de error
+                        dashboard_data = {
+                            'status': 'error_fallback',
+                            'metricas_globales': {
+                                'inversion_total_recomendada': 25000.0 if user_role == "admin" else 8500.0,
+                                'valor_total_en_riesgo': 12000.0,
+                                'ahorro_redistribucion': 3500.0,
+                                'precision_ia': 85.0,
+                                'total_sucursales_analizadas': 3 if user_role == "admin" else 1,
+                                'alertas_ia_activas': 12,
+                                'productos_analizados': 145
+                            }
+                        }
+                        
+                        if user_role == "admin":
+                            st.error(f"🔧 Detalle técnico para admin: {str(e)}")
+                        
+                        st.info("🔄 Verifica la conexión con el módulo de IA o contacta al administrador")
+                    
+                    # Procesar los datos (el resto del código sigue igual)
+                    if dashboard_data and 'metricas_globales' in dashboard_data:
+                        metricas = dashboard_data['metricas_globales']
+                        
+                        # Mostrar indicador de estado de los datos
+                        if dashboard_data.get('status') in ['fallback', 'error_fallback']:
+                            st.warning("📊 **Modo Demostración** - Datos mostrados son de ejemplo")
+                        
+                        # Métricas personalizadas según rol (código existente)
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            inversion = metricas.get('inversion_total_recomendada', 0)
+                            
+                            if user_role in ["admin", "gerente"]:
+                                st.metric(
+                                    "💰 Inversión Recomendada", 
+                                    format_currency(inversion),
+                                    help="Total recomendado para compras"
+                                )
+                            else:
+                                st.metric(
+                                    "📊 Productos Analizados", 
+                                    metricas.get('productos_analizados', 45),
+                                    help="Medicamentos incluidos en el análisis"
+                                )
+                        
+                        with col2:
+                            valor_riesgo = metricas.get('valor_total_en_riesgo', 0)
+                            st.metric(
+                                "⚠️ Valor en Riesgo", 
+                                format_currency(valor_riesgo),
+                                help="Valor de inventario próximo a vencer"
+                            )
+                        
+                        with col3:
+                            if user_role in ["admin", "gerente"]:
+                                st.metric(
+                                    "🔄 Ahorro Redistribución", 
+                                    format_currency(metricas.get('ahorro_redistribucion', 4200.0)),
+                                    help="Ahorro potencial redistribuyendo entre sucursales"
+                                )
+                            else:
+                                st.metric(
+                                    "🎯 Precisión IA", 
+                                    f"{metricas.get('precision_ia', 87.5):.1f}%",
+                                    help="Precisión de las predicciones del modelo"
+                                )
+                        
+                        with col4:
+                            if user_role == "admin":
+                                sucursales = metricas.get('total_sucursales_analizadas', 3)
+                                st.metric(
+                                    "🏥 Sucursales Analizadas", 
+                                    sucursales,
+                                    help="Número de sucursales incluidas en el análisis"
+                                )
+                            else:
+                                alertas = metricas.get('alertas_ia_activas', 12)
+                                st.metric(
+                                    "🚨 Alertas IA Activas", 
+                                    alertas,
+                                    help="Alertas generadas por el sistema inteligente"
+                                )
+                        
+                        st.markdown("---")
+                        
+                        # ========== SECCIÓN DE ALERTAS INTELIGENTES ==========
+                        st.subheader("🚨 Alertas Inteligentes Prioritarias")
+                        
+                        col_alert1, col_alert2 = st.columns(2)
+                        
+                        with col_alert1:
+                            # Simular alertas críticas basadas en la sucursal seleccionada
+                            if sucursal_filter == 1:  # UMF 15 Centro (o sucursal ID 1)
+                                alertas_criticas = [
+                                    {"tipo": "STOCK_CRÍTICO", "medicamento": "Paracetamol 500mg", "prioridad": "🔴 URGENTE", "accion": "Reorden inmediato - Stock: 5 unidades"},
+                                    {"tipo": "VENCIMIENTO", "medicamento": "Ibuprofeno 400mg", "prioridad": "🟡 MEDIO", "accion": "Vence en 15 días - Rotar inventario"},
+                                    {"tipo": "PRECIO_ALTO", "medicamento": "Ciprofloxacino 500mg", "prioridad": "🟠 ATENCIÓN", "accion": "Precio 12% arriba del promedio"},
+                                    {"tipo": "DEMANDA_ALTA", "medicamento": "Enalapril 10mg", "prioridad": "🔴 URGENTE", "accion": "Demanda +85% vs mes anterior"}
+                                ]
+                            elif sucursal_filter == 2:  # Otra sucursal
+                                alertas_criticas = [
+                                    {"tipo": "REDISTRIBUIR", "medicamento": "Metformina 850mg", "prioridad": "🟡 MEDIO", "accion": "Transferir 75 unidades de Norte"},
+                                    {"tipo": "DEMANDA_ALTA", "medicamento": "Enalapril 10mg", "prioridad": "🔴 URGENTE", "accion": "Aumentar pedido 150% para esta semana"},
+                                    {"tipo": "OPORTUNIDAD", "medicamento": "Furosemida 40mg", "prioridad": "🟢 BAJO", "accion": "Precio proveedor bajó 8%"}
+                                ]
+                            elif sucursal_filter == 3:  # Sucursal Sur
+                                alertas_criticas = [
+                                    {"tipo": "STOCK_CRÍTICO", "medicamento": "Paracetamol 500mg", "prioridad": "🔴 CRÍTICO", "accion": "Stock: 5 unidades - Reorden YA"},
+                                    {"tipo": "STOCK_CRÍTICO", "medicamento": "Ibuprofeno 400mg", "prioridad": "🔴 CRÍTICO", "accion": "Stock: 8 unidades - Transferir urgente"},
+                                    {"tipo": "MÚLTIPLE", "medicamento": "5 medicamentos", "prioridad": "🔴 EMERGENCIA", "accion": "Stock crítico generalizado"},
+                                    {"tipo": "REDISTRIBUIR", "medicamento": "Antibióticos", "prioridad": "🟡 MEDIO", "accion": "Solicitar desde Centro y Norte"}
+                                ]
+                            else:  # Vista consolidada (todas las sucursales)
+                                alertas_criticas = [
+                                    {"tipo": "SISTEMA", "medicamento": "Múltiples sucursales", "prioridad": "🟡 INFORMACIÓN", "accion": "Vista consolidada - Selecciona sucursal específica"},
+                                    {"tipo": "GLOBAL", "medicamento": "Paracetamol 500mg", "prioridad": "🔴 CRÍTICO", "accion": "Stock bajo en 2 de 3 sucursales"},
+                                    {"tipo": "REDISTRIBUCIÓN", "medicamento": "Sistema general", "prioridad": "🟠 OPORTUNIDAD", "accion": "12 oportunidades de redistribución"}
+                                ]
+                            
+                            st.markdown("**🔥 Alertas Más Críticas:**")
+                            for i, alerta in enumerate(alertas_criticas[:4], 1):  # Máximo 4 alertas
+                                # Color de borde según prioridad
+                                border_color = "#ef4444" if "🔴" in alerta['prioridad'] else "#f59e0b" if "🟡" in alerta['prioridad'] else "#10b981"
+                                
+                                st.markdown(f"""
+                                <div style="background: linear-gradient(90deg, rgba(100,100,100,0.1) 0%, transparent 100%); 
+                                            border-left: 4px solid {border_color}; 
+                                            padding: 0.8rem; margin: 0.5rem 0; 
+                                            border-radius: 8px;
+                                            box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+                                        <strong style="color: inherit;">#{i} {alerta['prioridad']} {alerta['tipo']}</strong>
+                                        <span style="background: rgba(59, 130, 246, 0.2); padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.8rem; color: #3b82f6;">
+                                            Alerta #{i}
+                                        </span>
+                                    </div>
+                                    <div style="color: #64748b; margin: 0.3rem 0;">
+                                        💊 <strong>{alerta['medicamento']}</strong>
+                                    </div>
+                                    <div style="color: #10b981; font-size: 0.9rem;">
+                                        ⚡ {alerta['accion']}
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
+                        
+                        with col_alert2:
+                            st.markdown("**📊 Estado General del Sistema:**")
+                            
+                            # Métricas de salud del sistema con datos dinámicos
+                            precision_ia = metricas.get('precision_ia', 87.5)
+                            total_sucursales = metricas.get('total_sucursales_analizadas', 1)
+                            
+                            sistema_salud = {
+                                "Conectividad": {
+                                    "valor": "🟢 Excelente" if precision_ia > 85 else "🟡 Buena", 
+                                    "detalle": "99.8% uptime - Sin interrupciones"
+                                },
+                                "Precisión IA": {
+                                    "valor": f"🎯 {precision_ia:.1f}%", 
+                                    "detalle": "Modelo entrenado con 15K transacciones"
+                                },
+                                "Sincronización": {
+                                    "valor": "⚡ Hace 2min", 
+                                    "detalle": f"Datos actualizados - {total_sucursales} sucursal(es)"
+                                },
+                                "Rendimiento": {
+                                    "valor": "🚀 Óptimo", 
+                                    "detalle": "Respuesta: 1.2s | CPU: 23% | RAM: 67%"
+                                },
+                                "Alertas Activas": {
+                                    "valor": f"🚨 {len(alertas_criticas)}", 
+                                    "detalle": f"Sucursal {sucursal_filter if sucursal_filter > 0 else 'Todas'} monitoreada"
+                                },
+                                "Última Predicción": {
+                                    "valor": "🧠 Exitosa", 
+                                    "detalle": f"Generadas {metricas.get('productos_analizados', 45)} recomendaciones"
+                                }
+                            }
+                            
+                            for metric, data in sistema_salud.items():
+                                # Color del indicador según el tipo de métrica
+                                if "🟢" in data['valor'] or "🚀" in data['valor'] or "⚡" in data['valor']:
+                                    bg_color = "rgba(16, 185, 129, 0.1)"
+                                    border_color = "#10b981"
+                                    text_color = "#10b981"
+                                elif "🟡" in data['valor']:
+                                    bg_color = "rgba(245, 158, 11, 0.1)"
+                                    border_color = "#f59e0b"
+                                    text_color = "#f59e0b"
+                                elif "🚨" in data['valor']:
+                                    bg_color = "rgba(239, 68, 68, 0.1)"
+                                    border_color = "#ef4444"
+                                    text_color = "#ef4444"
+                                else:
+                                    bg_color = "rgba(59, 130, 246, 0.1)"
+                                    border_color = "#3b82f6"
+                                    text_color = "#3b82f6"
+                                
+                                st.markdown(f"""
+                                <div style="background: {bg_color}; 
+                                            border-left: 3px solid {border_color};
+                                            border-radius: 8px; 
+                                            padding: 0.7rem; 
+                                            margin: 0.4rem 0;
+                                            transition: all 0.3s ease;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <strong style="color: inherit;">{metric}</strong>
+                                        <span style="color: {text_color}; font-weight: 600;">{data['valor']}</span>
+                                    </div>
+                                    <small style="color: #64748b; margin-top: 0.2rem; display: block;">
+                                        {data['detalle']}
+                                    </small>
+                                </div>
+                                """, unsafe_allow_html=True)
+                        
+                        st.markdown("---")
+                        
+                        # ========== ESTADÍSTICAS DETALLADAS DEL SISTEMA ==========
+                        st.subheader("📋 Centro de Información Detallada")
+                        
+                        with st.expander("🔍 Ver Estadísticas Completas del Sistema", expanded=False):
+                            col_stats1, col_stats2, col_stats3 = st.columns(3)
+                            
+                            with col_stats1:
+                                st.markdown("#### 🧠 Modelo de Inteligencia Artificial")
+                                st.markdown(f"""
+                                <div style="color: white;">
+                                <strong>Información del Modelo:</strong><br>
+                                • <strong>Versión:</strong> GPT-Inventory v2.1<br>
+                                • <strong>Base de entrenamiento:</strong> 15,000 transacciones reales<br>
+                                • <strong>Precisión promedio:</strong> {precision_ia:.1f}%<br>
+                                • <strong>Última actualización:</strong> Hace 2 horas<br>
+                                • <strong>Predicciones generadas hoy:</strong> 156<br>
+                                • <strong>Tiempo de entrenamiento:</strong> 48 horas<br>
+                                • <strong>Algoritmo base:</strong> Transformer + Análisis de series temporales<br><br>
+                                
+                                <strong>Métricas de Rendimiento:</strong><br>
+                                • <strong>Accuracy:</strong> {precision_ia:.1f}%<br>
+                                • <strong>Precisión:</strong> 89.2%<br>
+                                • <strong>Recall:</strong> 91.7%<br>
+                                • <strong>F1-Score:</strong> 90.4%
+                                </div>
+                                """, unsafe_allow_html=True)
+                            
+                            with col_stats2:
+                                st.markdown("#### 📊 Datos de la Sucursal Actual")
+                                
+                                # Datos específicos según la sucursal seleccionada
+                                if sucursal_filter > 0:
+                                    sucursal_info = next((s for s in sucursales_data if s['id'] == sucursal_filter), {})
+                                    sucursal_nombre = sucursal_info.get('nombre', f'Sucursal {sucursal_filter}')
+                                else:
+                                    sucursal_nombre = "Vista Consolidada (Todas)"
+                                
+                                productos_analizados = metricas.get('productos_analizados', 45)
+                                inversion_total = metricas.get('inversion_total_recomendada', 8500)
+                                
+                                st.markdown(f"""
+                                <div style="color: white;">
+                                <strong>Información de {sucursal_nombre}:</strong><br>
+                                • <strong>Medicamentos únicos:</strong> {productos_analizados}<br>
+                                • <strong>Valor total inventario:</strong> {format_currency(inversion_total * 3.2)}<br>
+                                • <strong>Rotación promedio:</strong> 2.3x/mes<br>
+                                • <strong>Eficiencia de stock:</strong> 91.2%<br>
+                                • <strong>Alertas resueltas hoy:</strong> 8<br>
+                                • <strong>Tiempo prom. resolución:</strong> 24 minutos<br>
+                                • <strong>Última actividad:</strong> Hace 5 minutos<br><br>
+                                
+                                <strong>Análisis de Tendencias:</strong><br>
+                                • <strong>Crecimiento mensual:</strong> +12.5%<br>
+                                • <strong>Reducción desperdicios:</strong> -18.3%<br>
+                                • <strong>Optimización costos:</strong> +$4,200 MXN/mes<br>
+                                • <strong>Satisfacción cliente:</strong> 94.7%
+                                </div>
+                                """, unsafe_allow_html=True)
+                            
+                            with col_stats3:
+                                st.markdown("#### ⚡ Rendimiento del Sistema")
+                                st.markdown(f"""
+                                <div style="color: white;">
+                                <strong>Métricas de Infraestructura:</strong><br>
+                                • <strong>Tiempo de respuesta:</strong> 1.2s promedio<br>
+                                • <strong>Disponibilidad:</strong> 99.8% (SLA: 99.5%)<br>
+                                • <strong>Requests por minuto:</strong> 45<br>
+                                • <strong>CPU usage:</strong> 23% (Normal)<br>
+                                • <strong>Memoria RAM:</strong> 67% (2.1GB/3.2GB)<br>
+                                • <strong>Almacenamiento:</strong> 78% (156GB/200GB)<br>
+                                • <strong>Ancho de banda:</strong> 12.5 Mbps utilizado<br><br>
+                                
+                                <strong>Estadísticas de Base de Datos:</strong><br>
+                                • <strong>Conexiones activas:</strong> 12/50<br>
+                                • <strong>Queries por segundo:</strong> 23.4<br>
+                                • <strong>Tiempo resp. DB:</strong> 45ms<br>
+                                • <strong>Cache hit ratio:</strong> 89.2%<br>
+                                • <strong>Backup más reciente:</strong> Hace 6 horas<br><br>
+                                
+                                <strong>Seguridad y Auditoría:</strong><br>
+                                • <strong>Intentos de login hoy:</strong> 127<br>
+                                • <strong>Sesiones activas:</strong> 8<br>
+                                • <strong>Logs de auditoría:</strong> 1,245 entradas<br>
+                                • <strong>Último scan seguridad:</strong> Hace 12 horas
+                                </div>
+                                """, unsafe_allow_html=True)
+                        
+                        # ========== INFORMACIÓN CONTEXTUAL FINAL ==========
+                        # Nota informativa final con información de estado
+                        status_info = ""
+                        if dashboard_data.get('status') in ['fallback', 'error_fallback']:
+                            status_info = "ℹ️ **Modo Demostración Activo:** Algunos datos mostrados son simulados para propósitos de testing y desarrollo."
+                        elif sucursal_filter == 0:
+                            status_info = "💡 **Vista Consolidada:** Selecciona una sucursal específica en el panel lateral para ver análisis detallados por ubicación."
+                        else:
+                            sucursal_nombre = next((s.get('nombre', f'Sucursal {sucursal_filter}') for s in sucursales_data if s['id'] == sucursal_filter), f'Sucursal {sucursal_filter}')
+                            status_info = f"✅ **Análisis Activo:** Datos en tiempo real para **{sucursal_nombre}** | Última actualización: {datetime.now().strftime('%H:%M:%S')}"
+                        
+                        if status_info:
+                            st.info(status_info)
+                        
+                    else:
+                        st.error("❌ No se pudieron cargar las métricas inteligentes")
+                        if user_role in ["admin", "gerente"]:
+                            st.info("🔧 Verifica la conexión con el módulo de IA o contacta al administrador")
+                            
+                            # Panel de troubleshooting para administradores
+                            with st.expander("🔧 Panel de Diagnóstico (Solo Admin)", expanded=False):
+                                st.markdown("""
+                                <div style="color: white;">
+                                <strong>Posibles causas del error:</strong><br>
+                                1. <strong>Conexión con Supabase:</strong> Verificar conectividad a la base de datos<br>
+                                2. <strong>Módulo de IA:</strong> El servicio ia_routes.py puede estar inactivo<br>
+                                3. <strong>Timeout:</strong> La consulta puede estar tardando más de lo esperado<br>
+                                4. <strong>Permisos:</strong> Verificar que el usuario tenga acceso a datos de IA<br><br>
+                                
+                                <strong>Acciones recomendadas:</strong><br>
+                                • Revisar logs del servidor FastAPI<br>
+                                • Verificar endpoint: /inteligente/dashboard/sucursal/{sucursal_filter}<br>
+                                • Comprobar estado de Supabase<br>
+                                • Reiniciar módulo de recomendaciones inteligentes
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Información técnica adicional para debugging
+                                st.code(f"""
+                                DEBUG INFO:
+                                - Sucursal Filter: {sucursal_filter}
+                                - User Role: {user_role}
+                                - Timestamp: {datetime.now().isoformat()}
+                                - Dashboard Data: {dashboard_data}
+                                """)
+                        else:
+                            st.info("📞 Contacta al administrador del sistema para resolver este problema")
             
             # ========== PREDICCIONES ==========
             if tab_ia2:
@@ -2309,6 +2335,13 @@ with tab_ia1:
             if tab_ia3 and user_role in ["admin", "gerente"]:
                 with tab_ia3:
                     st.subheader("🛒 Recomendaciones Inteligentes de Compra")
+                    
+                    # Determinar sucursal para predicciones si no está definida
+                    if 'sucursal_pred' not in locals():
+                        if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
+                            sucursal_pred = current_user["sucursal_id"]
+                        else:
+                            sucursal_pred = selected_sucursal_id
                     
                     if sucursal_pred > 0:
                         recom_data = api._make_request(f"/inteligente/recomendaciones/compras/sucursal/{sucursal_pred}")
@@ -2471,7 +2504,6 @@ with tab_ia1:
                         if st.button("🔄 Reentrenar Modelo"):
                             st.info("🧠 Reentrenamiento iniciado (estimado: 30 minutos)")
 
-
 # ========== TAB 5: INGRESO DE INVENTARIO CON PERMISOS ==========
 if tab_mapping[4] is not None:  # Si la pestaña está disponible
     with tab_mapping[4]:
@@ -2494,9 +2526,13 @@ if tab_mapping[4] is not None:  # Si la pestaña está disponible
             # Obtener datos necesarios según permisos
             medicamentos_data = api._make_request("/medicamentos")
             
+            # Cargar inventario_data para validaciones
+            inventario_data = get_inventario_data_for_user(user_role, current_user, selected_sucursal_id, api)
+
             if not medicamentos_data:
                 st.error("❌ No se pudieron cargar los medicamentos. Verifica la conexión API.")
                 st.stop()
+
             
             # Filtrar sucursales según permisos
             if user_role in ["gerente", "farmaceutico"] and current_user.get("sucursal_id"):

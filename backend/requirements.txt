@@ -19,5 +19,8 @@ Pillow==10.0.1
 # Exportación Excel
 xlsxwriter==3.1.2
 
+scikit-learn==1.3.2
+
+
 # Base de datos (si usas Supabase)
 supabase==2.4.0

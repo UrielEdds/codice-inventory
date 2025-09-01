@@ -1,124 +1,334 @@
-📦 Códice Inventory: Sistema de Inventario Inteligente
+💊 Códice Inventory: Sistema Inteligente para Farmacias y Distribuidoras Farmacéuticas
 
-Transforma la gestión de tu negocio con Códice Inventory, la plataforma inteligente que optimiza tu inventario, reduce costos y potencia tus decisiones a través de la Inteligencia Artificial. Adaptable a cualquier sector: retail, logística, manufactura y más.
+Transforma la gestión farmacéutica con Códice Inventory, la plataforma especializada que optimiza tu inventario de medicamentos, garantiza el cumplimiento regulatorio y potencia tus decisiones a través de la Inteligencia Artificial.
+
+Diseñado específicamente para farmacias, distribuidoras farmacéuticas, clínicas y hospitales.
 
 
 
 ✨ ¿Por qué elegir Códice Inventory?
 
-Nuestra plataforma no solo registra entradas y salidas, sino que se convierte en el cerebro estratégico de tu operación, permitiéndote tener control total, anticipar el futuro y maximizar tu rentabilidad.
+Nuestra plataforma no solo registra entradas y salidas de medicamentos, sino que se convierte en el cerebro estratégico de tu operación farmacéutica, permitiéndote tener control total, anticipar necesidades y maximizar tu rentabilidad mientras cumples con todas las normativas sanitarias.
 
 
 
-Principales Beneficios
+🎯 Principales Beneficios
 
-🤖 Inteligencia de Negocios y Predicción
+🤖 Inteligencia Farmacéutica y Predicción
 
-Anticípate a la Demanda: Nuestros algoritmos de IA pronostican las ventas futuras para que compres de manera inteligente, evitando tanto el exceso de stock como las roturas.
 
 
+Anticípate a la Demanda: Algoritmos de IA especializados que pronostican las necesidades de medicamentos para que compres de manera inteligente
 
-Optimiza tus Compras: Recibe recomendaciones automáticas sobre qué, cuánto y cuándo reabastecer.
+Optimiza tus Compras: Recomendaciones automáticas sobre qué medicamentos, cuántas unidades y cuándo reabastecer
 
+Reduce Pérdidas por Vencimiento: Alertas proactivas sobre lotes con riesgo de caducar, crítico en el sector farmacéutico
 
+Análisis de Rotación: Identifica medicamentos de alta y baja rotación para optimizar tu inversión
 
-Reduce Mermas: Recibe alertas proactivas sobre lotes con riesgo de caducar o volverse obsoletos.
 
 
+🏥 Gestión Multi-Sucursal Especializada
 
-🏢 Gestión Centralizada Multi-Sucursal
 
-Visibilidad 360°: Supervisa todas tus sucursales o almacenes desde una única plataforma y en tiempo real.
 
+Visibilidad 360° Farmacéutica: Supervisa todas tus farmacias o puntos de distribución desde una única plataforma
 
+Redistribución Inteligente: La IA identifica oportunidades para transferir medicamentos entre sucursales, evitando vencimientos y desabasto
 
-Redistribución Inteligente: La IA identifica oportunidades para transferir productos entre ubicaciones, balanceando tu inventario y aumentando las ventas.
+Control Sanitario Unificado: Mantén estándares de calidad consistentes en toda tu cadena farmacéutica
 
 
 
-Control Unificado: Estandariza operaciones y mantén la consistencia de datos en toda tu organización.
+⚕️ Validación y Control Farmacéutico
 
 
 
-🔐 Control Total y Roles Personalizados
+Validación Profesional: Sistema de validaciones farmacéuticas obligatorias para garantizar la dispensación adecuada
 
-Jerarquía de Permisos: Asigna roles de Administrador, Gerente, Operador o Empleado. Cada usuario ve y hace solo lo que necesita.
+Control de Medicamentos Controlados: Registro especial para antibióticos, cardiovasculares y otros medicamentos regulados
 
+Dispensación con Receta: Control completo de recetas médicas, médicos prescriptores y posología
 
+Trazabilidad Sanitaria: Auditoría completa para cumplimiento regulatorio y visitas de inspección
 
-Seguridad a Nivel de Dato: Garantizamos que la información sensible solo sea accesible para el personal autorizado.
 
 
+🔐 Roles Farmacéuticos Especializados
 
-Trazabilidad Completa: Cada movimiento queda registrado. Sabrás quién hizo qué, cuándo y dónde, para una auditoría impecable.
 
 
+Farmacéutico Responsable: Control técnico, validaciones profesionales y responsabilidad sanitaria
 
-Módulos del Sistema: Un Tour por la Plataforma
+Gerente de Sucursal: Gestión ejecutiva, control de costos y análisis de rentabilidad
 
-Códice Inventory está organizado en módulos intuitivos que se adaptan a los permisos de cada usuario.
+Personal de Mostrador: Registro de ventas y consultas básicas de inventario
 
+Administrador del Sistema: Control total, configuración y gestión multi-sucursal
 
 
-📊 Dashboard Ejecutivo: Inicia tu día con una vista clara de los indicadores clave (KPIs) de tu inventario: valor total, rotación, alertas críticas y rendimiento por sucursal.
 
 
 
-🔍 Consulta de Inventario Avanzada: Encuentra cualquier producto al instante. Utiliza filtros por categoría, stock, ubicación, proveedor y más.
+📋 Módulos Especializados del Sistema
 
+📊 Dashboard Farmacéutico Ejecutivo
 
+Inicia tu día con indicadores clave específicos del sector:
 
-📈 Análisis y Reportes: Compara el rendimiento entre sucursales, descubre tus productos estrella con análisis ABC y genera reportes para tus juntas directivas.
 
 
+💊 Stock total de medicamentos por categoría terapéutica
 
-📥 Gestión de Ingresos: Registra la entrada de nuevos lotes de forma masiva o individual. Controla fechas de caducidad, costos y proveedores sin esfuerzo.
+⚠️ Alertas críticas de vencimiento (30, 60, 90 días)
 
+💰 Valor del inventario y rotación farmacéutica
 
+🔴 Medicamentos con stock crítico por sucursal
 
-📤 Gestión de Salidas: Procesa ventas, transferencias entre sucursales o consumos internos. Nuestro sistema te sugiere qué lote despachar para optimizar la rotación.
+📈 Análisis de tendencias de consumo
 
 
 
-🌐 Acceso y Modelo de Servicio (SaaS)
+🔍 Inventario Farmacéutico Avanzado
 
-Olvídate de las complicaciones técnicas. Códice Inventory es un Software como Servicio (SaaS) diseñado para tu comodidad.
+Consulta especializada con filtros farmacéuticos:
 
 
 
-100% en la Nube: No necesitas instalar nada. Accede a la plataforma de forma segura desde cualquier navegador web.
+🏷️ Por Categoría Terapéutica: Analgésicos, antibióticos, cardiovasculares, etc.
 
+📅 Por Fecha de Vencimiento: Críticos, próximos, vigentes
 
+🏥 Por Sucursal: Control independiente por punto de venta
 
-Siempre Actualizado: Recibirás las últimas mejoras y funcionalidades de forma automática y sin costos adicionales.
+📦 Por Lote: Trazabilidad completa desde fabricante hasta dispensación
 
+🔍 Búsqueda Inteligente: Por principio activo, laboratorio o código SKU
 
 
-Máxima Disponibilidad: Nuestra infraestructura robusta garantiza un acceso estable y confiable para que tu operación nunca se detenga.
 
+📈 Análisis Farmacéutico Comparativo
 
+Reportes especializados para toma de decisiones:
 
-Soporte Prioritario: Nuestro equipo de expertos está listo para ayudarte a resolver cualquier duda y sacar el máximo provecho de la plataforma.
 
 
+📊 Análisis ABC Farmacéutico: Medicamentos de alta, media y baja rotación
 
-📞 ¡Hablemos! Solicita una Demostración
+🏥 Comparativo entre Sucursales: Rendimiento y patrones de consumo
 
-¿Listo para llevar tu gestión de inventario al siguiente nivel? Queremos mostrarte cómo Códice Inventory puede adaptarse a las necesidades específicas de tu negocio.
+💰 Análisis de Rentabilidad: Margen por categoría terapéutica
 
+📋 Cumplimiento Regulatorio: Reportes para auditorías sanitarias
 
 
-Email: ventas@codice-inventory.com
 
+🧠 IA Farmacéutica Predictiva
 
+Inteligencia artificial especializada en medicamentos:
+
+
+
+🔮 Predicción de Demanda: Basada en patrones de prescripción médica
+
+🛒 Recomendaciones de Compra: Considerando factores estacionales y epidemiológicos
+
+🔄 Optimización de Redistribución: Balanceo inteligente entre sucursales
+
+⏰ Alertas Inteligentes de Vencimiento: Priorizadas por valor y rotación
+
+
+
+📥 Ingreso de Lotes Farmacéuticos
+
+Registro especializado con validaciones:
+
+
+
+🏭 Control de Proveedores: Laboratorios y distribuidoras autorizadas
+
+📅 Validación de Fechas: Vida útil mínima y alertas de vencimiento
+
+⚕️ Validación Farmacéutica: Verificación profesional obligatoria
+
+🌡️ Condiciones de Almacenamiento: Temperatura, humedad y ubicación específica
+
+📋 Registro Sanitario: Control de autorizaciones y lotes certificados
+
+
+
+📤 Dispensación y Salidas Controladas
+
+Control farmacéutico de salidas:
+
+
+
+💊 Dispensación con Receta: Registro completo de prescripciones médicas
+
+🏪 Venta de Medicamentos OTC: Control de medicamentos de venta libre
+
+🔄 Transferencias entre Sucursales: Optimización de stock
+
+📋 Control FEFO: First Expire, First Out para minimizar vencimientos
+
+⚕️ Validación Farmacéutica: Verificación de posología e interacciones
+
+
+
+
+
+🌐 Modelo SaaS Especializado en Farmacia
+
+💾 100% en la Nube Farmacéutica
+
+
+
+Acceso Seguro: Encriptación de grado farmacéutico para datos sensibles
+
+Backup Automático: Respaldo continuo de recetas, lotes y movimientos
+
+Disponibilidad 24/7: Tu farmacia nunca se detiene, nosotros tampoco
+
+
+
+🔄 Actualizaciones Regulatorias Automáticas
+
+
+
+Normativas Sanitarias: Actualizaciones automáticas según cambios regulatorios
+
+Nuevas Funcionalidades: Mejoras continuas basadas en necesidades farmacéuticas
+
+Sin Costos Adicionales: Todas las actualizaciones incluidas en tu suscripción
+
+
+
+🛡️ Seguridad y Cumplimiento
+
+
+
+Trazabilidad Completa: Registro auditable de todos los movimientos
+
+Control de Acceso: Permisos específicos por rol farmacéutico
+
+Respaldo Legal: Documentación que respalda auditorías sanitarias
+
+
+
+
+
+🎯 Beneficios Específicos para tu Farmacia
+
+💰 Optimización Financiera
+
+
+
+Reduce pérdidas por vencimiento hasta en un 40%
+
+Optimiza compras y evita sobrestocks costosos
+
+Mejora el flujo de caja con predicciones precisas
+
+
+
+⚕️ Cumplimiento Profesional
+
+
+
+Garantiza dispensación responsable con validaciones farmacéuticas
+
+Mantén registros completos para auditorías sanitarias
+
+Mejora la atención al paciente con información completa
+
+
+
+📊 Inteligencia de Negocio
+
+
+
+Identifica patrones de consumo por temporada
+
+Anticípate a epidemias y demandas especiales
+
+Optimiza tu cartera de medicamentos por rentabilidad
+
+
+
+
+
+🚀 Casos de Uso Exitosos
+
+🏪 Cadenas de Farmacias
+
+"Gestiona múltiples sucursales con control centralizado y redistribución automática de medicamentos próximos a vencer."
+
+🏥 Farmacias Hospitalarias
+
+"Control especializado de medicamentos de alto costo y dispensación controlada para pacientes internos."
+
+🚚 Distribuidoras Farmacéuticas
+
+"Optimización de rutas de distribución y control de temperatura para medicamentos especiales."
+
+
+
+📞 ¡Solicita tu Demostración Farmacéutica Personalizada!
+
+¿Listo para revolucionar la gestión de tu farmacia? Queremos mostrarte cómo Códice Inventory puede adaptarse a las necesidades específicas de tu operación farmacéutica.
+
+📧 Contacto Directo
+
+Teléfono: 
+
+Email Comercial: ventas@codicedata.com (próximamente)
+
+Email Técnico: soporte@codicedata.com (próximamente)
 
 Sitio Web: https://www.codice-inventory.com (próximamente)
 
 
 
-¡Agenda una demostración personalizada hoy mismo y descubre el poder de un inventario inteligente!
+🎯 ¿Qué Incluye tu Demostración?
 
 
 
-© 2025 Códice Inventory. Todos los derechos reservados.
+✅ Análisis personalizado de tus necesidades farmacéuticas
+
+✅ Configuración demo con tus categorías de medicamentos
+
+✅ Simulación de flujos de dispensación y control
+
+✅ Propuesta de implementación y capacitación
+
+✅ Análisis de retorno de inversión específico
+
+
+
+🏆 Garantía de Resultados
+
+
+
+Implementación en 30 días o menos
+
+Capacitación completa incluida para tu equipo farmacéutico
+
+Soporte técnico especializado en farmacia
+
+Garantía de satisfacción o devolución del 100%
+
+
+
+
+
+¡Transforma tu farmacia hoy mismo con Códice Inventory!
+
+La inteligencia artificial al servicio de la salud de tus pacientes y la rentabilidad de tu negocio.
+
+
+
+© 2025 Códice Inventory - Sistema Inteligente para Farmacias
+
+Todos los derechos reservados. Desarrollado con ❤️ para el sector farmacéutico mexicano.
 

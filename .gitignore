@@ -1,3 +1,4 @@
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -179,3 +180,8 @@ Desktop.ini
 # Temporary files
 *.tmp
 *.temp
+
+# local secrets / notes
+frontend/auth/*.txt
+frontend/auth/*
+!frontend/auth/.gitkeep

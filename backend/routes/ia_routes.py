@@ -16,8 +16,10 @@ from utils.recomendaciones_inteligentes import RecomendacionesInteligentes, gene
 router = APIRouter()
 
 # Configuración Supabase (mantener consistencia con main)
-SUPABASE_URL = "https://etblilptaljvewsavooj.supabase.co"
-SUPABASE_KEY = "REMOVED_JWT"
+import os
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+
 
 logger = logging.getLogger(__name__)
 

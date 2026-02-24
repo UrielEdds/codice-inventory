@@ -4,6 +4,14 @@ Interfaz completa con IA, predicciones y gestión multi-sucursal
 """
 
 import streamlit as st
+# ========== CONFIGURACIÓN DE PÁGINA ==========
+st.set_page_config(
+    page_title="Sistema de Inventario Inteligente",
+    page_icon="📦",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -18,7 +26,7 @@ import os
 from dotenv import load_dotenv
 
 from auth.permissions import get_role_description, get_role_color
-
+from auth.permissions import get_permissions_by_role, has_permission
 from io import BytesIO
 import xlsxwriter
 
@@ -28,7 +36,7 @@ from auth import (
     show_user_info, 
     get_auth_manager,
     filter_tabs_by_permissions,
-    get_permissions_by_role
+    
 )
 
 # ========== SISTEMA DE AUTENTICACIÓN ==========
@@ -37,12 +45,22 @@ current_user = require_auth()
 
 # Si llegamos aquí, el usuario está autenticado
 auth_manager = get_auth_manager()
-user_permissions = auth_manager.get_user_permissions()
-user_role = auth_manager.get_user_role()
 
+# Normalizar rol y permisos desde la matriz (evita depender de métodos extra del manager)
+user_role = (current_user.get("role") or "empleado").strip().lower()
+user_permissions = get_permissions_by_role(user_role)
 
+def user_has(required):
+    """Chequeo flexible: string o lista/tuple/set. Soporta wildcard y .full via has_permission()."""
+    if required is None:
+        return True
+    if isinstance(required, (list, tuple, set)):
+        return any(has_permission(user_permissions, r) for r in required)
+    return has_permission(user_permissions, required)
 # Cargar variables de entorno
 load_dotenv()
+
+DEFAULT_TENANT_ID = int(os.getenv('DEFAULT_TENANT_ID', '1'))
 
 # Configuración de autenticación
 API_SECRET = os.getenv("API_SECRET", "default-api-secret-change-in-production")
@@ -201,13 +219,6 @@ else:
 
 print(f"📷 Logo status: {'✅ Loaded' if logo_b64 else '❌ Using emoji fallback'}")
 
-# ========== CONFIGURACIÓN DE PÁGINA ==========
-st.set_page_config(
-    page_title="Sistema de Inventario Inteligente",
-    page_icon="📦",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # ========== CSS GLOBAL CÓDICE INVENTORY ==========
 st.markdown("""
@@ -237,6 +248,10 @@ st.markdown("""
         padding: 8px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         margin-bottom: 1.5rem;
+    
+        flex-wrap: wrap !important;
+        gap: 6px !important;
+        overflow-x: visible !important;
     }
     
     .stTabs [data-baseweb="tab"] {
@@ -420,6 +435,18 @@ def format_percentage(value):
     """Formatear como porcentaje"""
     return f"{value:.1f}%"
 
+
+def safe_float(value, default=0.0):
+    """Convierte value a float de forma segura (None/''/NaN -> default)."""
+    try:
+        if value is None:
+            return float(default)
+        if isinstance(value, str) and value.strip() == "":
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
 def get_status_color(estado):
     """Obtener color según el estado"""
     colors = {
@@ -444,6 +471,36 @@ def create_metric_card(title, value, delta=None, color="blue"):
         {delta_html}
     </div>
     """
+def normalize_sucursales(data):
+    """Normaliza /sucursales a lista de dicts con {id, nombre}."""
+    if not data:
+        return []
+
+    # Algunos backends devuelven {"data":[...]} o {"sucursales":[...]}
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            data = data["data"]
+        elif isinstance(data.get("sucursales"), list):
+            data = data["sucursales"]
+
+    if not isinstance(data, list):
+        return []
+
+    normalized = []
+    for idx, item in enumerate(data, start=1):
+        if isinstance(item, dict):
+            nombre = item.get("nombre") or item.get("name")
+            if nombre is None:
+                continue
+            normalized.append({
+                "id": item.get("id", idx),
+                "nombre": nombre,
+                **{k: v for k, v in item.items() if k not in ("name",)}
+            })
+        elif isinstance(item, str):
+            normalized.append({"id": idx, "nombre": item})
+    return normalized
+
 
 # ========== SIDEBAR CÓDICE INVENTORY (VERSIÓN LIMPIA) ==========
 # ========== SIDEBAR CÓDICE INVENTORY CON AUTENTICACIÓN ==========
@@ -481,7 +538,7 @@ with st.sidebar:
     st.markdown("---")
     
     # Selector de sucursal (filtrado por permisos del usuario)
-    sucursales_data = api._make_request("/sucursales")
+    sucursales_data = normalize_sucursales(api._make_request("/sucursales"))
     sucursal_options = {"Todas las Sucursales": 0}
     
     if sucursales_data:
@@ -558,7 +615,7 @@ with st.sidebar:
         "admin.full": "👑 Administración"
     }
     
-    user_perms = auth_manager.get_user_permissions()
+    user_perms = user_permissions
     for perm in user_perms[:5]:  # Mostrar solo los primeros 5
         perm_name = permissions_display.get(perm, perm)
         st.markdown(f"• {perm_name}")
@@ -630,73 +687,67 @@ else:
 # Definir todas las pestañas disponibles
 all_tabs = [
     ("📊 Dashboard Principal", "dashboard.basic"),
-    ("🔍 Inventario Detallado", "inventario.read"), 
+    ("🔍 Inventario Detallado", "inventario.read"),
     ("📈 Análisis Comparativo", "analisis.full"),
     ("🤖 IA & Predicciones", "ia.limited"),
     ("📥 Ingreso Inventario", "ingreso.full"),
-    ("📤 Salidas de Inventario", "salidas.limited")
+    ("📦 Salidas Operativas", "salidas.limited"),
+    ("🧾 Ventas", ["ventas.limited", "ventas.full"]),
+    ("🧩 Catálogo de Productos", "productos.manage"),
+    ("🏷️ Promociones", "promociones.manage"),
 ]
 
 # Filtrar pestañas basadas en permisos del usuario
+# Nota: Admin ve todas las pestañas (independiente de la matriz de permisos)
 allowed_tabs = []
 tab_permissions = {}
 
-for tab_name, required_permission in all_tabs:
-    if auth_manager.check_permission(required_permission):
-        allowed_tabs.append(tab_name)
-        tab_permissions[tab_name] = required_permission
+if user_role == "admin":
+    allowed_tabs = [t[0] for t in all_tabs]
+    tab_permissions = {t[0]: t[1] for t in all_tabs}
+else:
+    for tab_name, required_permission in all_tabs:
+        if user_has(required_permission):
+            allowed_tabs.append(tab_name)
+            tab_permissions[tab_name] = required_permission
 
 # Mostrar información de pestañas disponibles
 if user_role != "admin":
-    st.info(f"📋 **Pestañas disponibles para {get_role_description(user_role)}:** {len(allowed_tabs)} de {len(all_tabs)}")
+    st.info(
+        f"📋 **Pestañas disponibles para {get_role_description(user_role)}:** "
+        f"{len(allowed_tabs)} de {len(all_tabs)}"
+    )
 
-# Crear pestañas dinámicamente
-if len(allowed_tabs) >= 6:
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(allowed_tabs[:6])
-    tabs = [tab1, tab2, tab3, tab4, tab5, tab6]
-elif len(allowed_tabs) == 5:
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(allowed_tabs)
-    tabs = [tab1, tab2, tab3, tab4, tab5, None]
-elif len(allowed_tabs) == 4:
-    tab1, tab2, tab3, tab4 = st.tabs(allowed_tabs)
-    tabs = [tab1, tab2, tab3, tab4, None, None]
-elif len(allowed_tabs) == 3:
-    tab1, tab2, tab3 = st.tabs(allowed_tabs)
-    tabs = [tab1, tab2, tab3, None, None, None]
-elif len(allowed_tabs) == 2:
-    tab1, tab2 = st.tabs(allowed_tabs)
-    tabs = [tab1, tab2, None, None, None, None]
-elif len(allowed_tabs) == 1:
-    tab1 = st.tabs(allowed_tabs)[0]
-    tabs = [tab1, None, None, None, None, None]
-else:
+# Validación: si no hay tabs permitidas
+if not allowed_tabs:
     st.error("🚫 No tienes permisos para acceder a ninguna sección del sistema")
     st.stop()
 
-# Crear mapeo de pestañas
-tab_mapping = {}
-original_tabs = [
-    "📊 Dashboard Principal",
-    "🔍 Inventario Detallado", 
-    "📈 Análisis Comparativo",
-    "🤖 IA & Predicciones",
-    "📥 Ingreso Inventario",
-    "📤 Salidas de Inventario"
-]
+# Crear pestañas dinámicamente (SIN recortar a 6)
+tabs = st.tabs(allowed_tabs)
 
-for i, tab_name in enumerate(original_tabs):
-    if tab_name in allowed_tabs:
-        tab_index = allowed_tabs.index(tab_name)
-        tab_mapping[i] = tabs[tab_index]
+# Crear mapeo de pestañas (por índice original de all_tabs)
+# tab_mapping[0] -> Dashboard Principal
+# tab_mapping[5] -> Salidas de Inventario
+# tab_mapping[6] -> Ventas
+tab_mapping = {}
+
+# Mapa: nombre_tab -> índice dentro de allowed_tabs/tabs
+allowed_index_map = {name: idx for idx, name in enumerate(allowed_tabs)}
+
+for i, (tab_name, _perm) in enumerate(all_tabs):
+    if tab_name in allowed_index_map:
+        tab_mapping[i] = tabs[allowed_index_map[tab_name]]
     else:
         tab_mapping[i] = None
+
 
 # ========== TAB 1: DASHBOARD PRINCIPAL ==========
 
 if tab_mapping[0] is not None:  # Si la pestaña está disponible
     with tab_mapping[0]:
         # Verificar permisos específicos
-        if not auth_manager.check_permission("dashboard.basic"):
+        if not user_has("dashboard.basic"):
             st.error("🚫 No tienes permisos para acceder al Dashboard")
         else:
             st.header("📊 Panel de Control Ejecutivo")
@@ -777,7 +828,7 @@ if tab_mapping[0] is not None:  # Si la pestaña está disponible
                     if not df_inventario.empty:
                         # Obtener lotes para analizar vencimientos
                         lotes_data = api._make_request("/lotes")
-                        
+
                         if lotes_data:
                             # Calcular días hasta vencimiento para cada lote
                             hoy = datetime.now().date()
@@ -840,7 +891,39 @@ if tab_mapping[0] is not None:  # Si la pestaña está disponible
                             else:
                                 st.info("📊 No hay datos de vencimiento disponibles")
                         else:
-                            st.info("📦 No se pudieron cargar los lotes")
+                            # Fallback rápido para demo: usar columna "estado" del inventario si existe
+                            if 'estado' in df_inventario.columns:
+                                estado_map = {
+                                    'VENCIDO': "🔴 Vencido",
+                                    'POR_VENCER': "🟠 Crítico (≤30 días)",
+                                    'STOCK_BAJO': "🟡 Próximo (≤90 días)",
+                                    'DISPONIBLE': "🟢 Vigente (>90 días)",
+                                }
+                                status_vencimiento = [
+                                    estado_map.get(str(x).upper(), "🔵 Sin fecha")
+                                    for x in df_inventario['estado'].fillna("🔵 Sin fecha")
+                                ]
+                                from collections import Counter
+                                status_counts = Counter(status_vencimiento)
+
+                                fig_venc = go.Figure(data=[
+                                    go.Bar(
+                                        x=list(status_counts.keys()),
+                                        y=list(status_counts.values()),
+                                        text=list(status_counts.values()),
+                                        textposition='auto'
+                                    )
+                                ])
+                                fig_venc.update_layout(
+                                    title="Distribución de inventario por estado (fallback)",
+                                    xaxis_title="Estado",
+                                    yaxis_title="Cantidad",
+                                    height=350
+                                )
+                                st.plotly_chart(fig_venc, use_container_width=True)
+                                st.caption("⚠️ Fallback: No hay /lotes. Se usa el estado del inventario para la demo.")
+                            else:
+                                st.info("📦 No se pudieron cargar los lotes (endpoint /lotes sin datos)")
                     else:
                         st.info("📋 No hay datos de inventario disponibles")
                 
@@ -932,7 +1015,7 @@ if tab_mapping[0] is not None:  # Si la pestaña está disponible
 if tab_mapping[1] is not None:  # Si la pestaña está disponible
     with tab_mapping[1]:
         # Verificar permisos específicos
-        if not auth_manager.check_permission("inventario.read"):
+        if not user_has("inventario.read"):
             st.error("🚫 No tienes permisos para ver el inventario detallado")
         else:
             st.header("🔍 Inventario Detallado")
@@ -1129,6 +1212,7 @@ if tab_mapping[1] is not None:  # Si la pestaña está disponible
                             # Verificar si tenemos lotes después del filtrado
                             if df_lotes.empty:
                                 st.info("📋 No hay lotes disponibles para los medicamentos filtrados")
+                                st.stop()
                             else:
                                 # Merge con datos de medicamentos para obtener nombres
                                 df_lotes_completo = df_lotes.merge(
@@ -1136,10 +1220,18 @@ if tab_mapping[1] is not None:  # Si la pestaña está disponible
                                     on='medicamento_id',
                                     how='left'
                                 )
-                                                            
-                            # Convertir fecha a datetime
-                            df_lotes_completo['fecha_vencimiento'] = pd.to_datetime(df_lotes_completo['fecha_vencimiento'])
-                            df_lotes_completo['dias_para_vencer'] = (df_lotes_completo['fecha_vencimiento'] - pd.Timestamp.now()).dt.days
+
+                                # Normalizar nombre de columna de fecha (API vs tabla)
+                                if 'fecha_vencimiento' not in df_lotes_completo.columns and 'fecha_caducidad' in df_lotes_completo.columns:
+                                    df_lotes_completo['fecha_vencimiento'] = df_lotes_completo['fecha_caducidad']
+
+                                # Convertir fecha a datetime (tolerante)
+                                df_lotes_completo['fecha_vencimiento'] = pd.to_datetime(
+                                    df_lotes_completo.get('fecha_vencimiento'), errors='coerce'
+                                )
+                                df_lotes_completo['dias_para_vencer'] = (
+                                    df_lotes_completo['fecha_vencimiento'] - pd.Timestamp.now()
+                                ).dt.days
                             
                             # Filtros de vencimiento
                             col_venc1, col_venc2, col_venc3 = st.columns(3)
@@ -1221,7 +1313,27 @@ if tab_mapping[1] is not None:  # Si la pestaña está disponible
                                 ]
                                 
                                 # Renombrar columnas
-                                df_display = df_lotes_filtrado[columnas_mostrar].copy()
+                                                                # Normalizar nombres también en el DF filtrado (por si se creó antes de la normalización global)
+                                try:
+                                    if 'numero_lote' not in df_lotes_filtrado.columns and 'lote_codigo' in df_lotes_filtrado.columns:
+                                        df_lotes_filtrado['numero_lote'] = df_lotes_filtrado['lote_codigo']
+                                    if 'lote_codigo' not in df_lotes_filtrado.columns and 'numero_lote' in df_lotes_filtrado.columns:
+                                        df_lotes_filtrado['lote_codigo'] = df_lotes_filtrado['numero_lote']
+                                    if 'fecha_vencimiento' not in df_lotes_filtrado.columns and 'fecha_caducidad' in df_lotes_filtrado.columns:
+                                        df_lotes_filtrado['fecha_vencimiento'] = df_lotes_filtrado['fecha_caducidad']
+                                    if 'fecha_caducidad' not in df_lotes_filtrado.columns and 'fecha_vencimiento' in df_lotes_filtrado.columns:
+                                        df_lotes_filtrado['fecha_caducidad'] = df_lotes_filtrado['fecha_vencimiento']
+                                except Exception:
+                                    pass
+
+                                # Selección segura de columnas (evita KeyError si alguna no existe)
+                                cols_disponibles = [c for c in columnas_mostrar if c in df_lotes_filtrado.columns]
+                                cols_faltantes = [c for c in columnas_mostrar if c not in df_lotes_filtrado.columns]
+                                if cols_faltantes:
+                                    st.warning(f"⚠️ Columnas no disponibles en lotes (se omiten): {', '.join(cols_faltantes)}")
+
+                                df_display = df_lotes_filtrado[cols_disponibles].copy()
+
                                 df_display.columns = [
                                     'Lote', 'Medicamento', 'Categoría', 'Stock', 
                                     'Vencimiento', 'Días', 'Fabricante'
@@ -1313,7 +1425,7 @@ if tab_mapping[1] is not None:  # Si la pestaña está disponible
 if tab_mapping[2] is not None:  # Si la pestaña está disponible
     with tab_mapping[2]:
         # Verificar permisos específicos
-        if not auth_manager.check_permission("analisis.full"):
+        if not user_has("analisis.full"):
             st.error("🚫 No tienes permisos para acceder a los análisis comparativos")
         else:
             st.header("📈 Análisis Comparativo Avanzado")
@@ -1800,7 +1912,7 @@ if tab_mapping[2] is not None:  # Si la pestaña está disponible
 if tab_mapping[3] is not None:  # Si la pestaña está disponible
     with tab_mapping[3]:
         # Verificar permisos específicos
-        if not auth_manager.check_permission("ia.limited"):
+        if not user_has("ia.limited"):
             st.error("🚫 No tienes permisos para acceder a las funciones de IA")
         else:
             st.header("🧠 Dashboard Inteligente Multi-Sucursal")
@@ -2674,11 +2786,11 @@ if tab_mapping[3] is not None:  # Si la pestaña está disponible
 if tab_mapping[4] is not None:  # Si la pestaña está disponible
     with tab_mapping[4]:
         # Verificar permisos específicos
-        if not auth_manager.check_permission("ingreso.full"):
+        if not user_has("ingreso.full"):
             st.error("🚫 No tienes permisos para ingresar inventario")
         else:
             st.header("📥 Ingreso de Lotes de Inventario")
-            
+
             # Mostrar información específica del rol
             if user_role == "admin":
                 st.success("👑 **Modo Administrador** - Ingreso sin restricciones a cualquier sucursal")
@@ -2686,230 +2798,251 @@ if tab_mapping[4] is not None:  # Si la pestaña está disponible
                 st.info("🏢 **Modo Gerente** - Gestión completa de ingresos para tu sucursal")
             elif user_role == "farmaceutico":
                 st.info("⚕️ **Modo Farmacéutico** - Control técnico de ingresos y validaciones")
-            
-            st.markdown("**Registrar nuevos lotes de medicamentos existentes con validaciones avanzadas**")
-            
-            # Obtener datos necesarios según permisos
+
+            st.markdown("**Registrar nuevos lotes de productos existentes con validaciones avanzadas**")
+
+            # Obtener datos necesarios
             medicamentos_data = api._make_request("/medicamentos")
-            
-            # Cargar inventario_data para validaciones
+
+            # Cargar inventario_data para validaciones (si tu función existe; si no, comenta esta línea)
             inventario_data = get_inventario_data_for_user(user_role, current_user, selected_sucursal_id, api)
 
             if not medicamentos_data:
-                st.error("❌ No se pudieron cargar los medicamentos. Verifica la conexión API.")
+                st.error("❌ No se pudieron cargar los productos. Verifica la conexión API.")
                 st.stop()
 
-            
             # Filtrar sucursales según permisos
             if user_role in ["gerente", "farmaceutico"] and current_user.get("sucursal_id"):
-                # Usuarios no-admin solo pueden ingresar a su sucursal
-                sucursales_permitidas = [suc for suc in sucursales_data if suc['id'] == current_user["sucursal_id"]]
+                sucursales_permitidas = [
+                    suc for suc in sucursales_data if suc.get("id") == current_user.get("sucursal_id")
+                ]
                 st.info(f"📍 Ingresando inventario para: **{current_user.get('sucursal_nombre', 'Tu sucursal')}**")
             else:
-                # Administradores pueden ingresar a cualquier sucursal
                 sucursales_permitidas = sucursales_data
-            
+
             if not sucursales_permitidas:
                 st.error("❌ No tienes sucursales asignadas para ingreso de inventario.")
                 st.stop()
-            
+
             # Inicializar session state para el carrito de lotes
-            if 'carrito_lotes' not in st.session_state:
+            if "carrito_lotes" not in st.session_state:
                 st.session_state.carrito_lotes = []
-            
-            # Formulario de ingreso de lote con validaciones avanzadas
+
+            # ========== FORMULARIO ==========
             with st.form("ingreso_lote"):
                 st.subheader("📦 Información del Lote")
-                
+
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
-                    # Seleccionar medicamento con filtros
                     if user_role == "farmaceutico":
                         st.markdown("**💊 Seleccionar Medicamento** *(Validación farmacéutica requerida)*")
                     else:
                         st.markdown("**💊 Seleccionar Medicamento**")
-                    
-                    # Crear opciones de medicamentos directamente sin filtro
+
                     medicamento_options = {
-                        f"{med['sku']} - {med['nombre']} ({med.get('categoria', 'N/A')})": med['id'] 
+                        f"{med.get('sku', 'SKU')} - {med.get('nombre', 'Sin nombre')} ({med.get('categoria', 'N/A')})": med["id"]
                         for med in medicamentos_data
                     }
-                    
+
                     selected_medicamento_display = st.selectbox(
-                        "Medicamento:",
+                        "Producto:",
                         options=list(medicamento_options.keys()),
-                        help="Medicamentos disponibles en el sistema filtrados por categoría"
+                        help="Productos disponibles en el sistema",
+                        key="tab5_medicamento_select",
                     )
                     selected_medicamento_id = medicamento_options[selected_medicamento_display]
-                    
+
                     # Seleccionar sucursal (filtrada por permisos)
                     if len(sucursales_permitidas) == 1:
-                        # Auto-seleccionar si solo hay una opción
-                        selected_sucursal_id = sucursales_permitidas[0]['id']
+                        selected_sucursal_id = sucursales_permitidas[0]["id"]
                         selected_sucursal_display = f"🏥 {sucursales_permitidas[0]['nombre']}"
                         st.info(f"📍 Sucursal: **{sucursales_permitidas[0]['nombre']}**")
                     else:
                         sucursal_options = {
-                            f"🏥 {suc['nombre']}": suc['id'] 
+                            f"🏥 {suc.get('nombre', 'Sucursal')}": suc["id"]
                             for suc in sucursales_permitidas
                         }
-                        
+
                         selected_sucursal_display = st.selectbox(
                             "🏥 Sucursal de Destino *",
                             options=list(sucursal_options.keys()),
-                            help="Sucursal donde se almacenará el lote"
+                            help="Sucursal donde se almacenará el lote",
+                            key="tab5_sucursal_select",
                         )
                         selected_sucursal_id = sucursal_options[selected_sucursal_display]
-                
+
                 with col2:
-                    # Número de lote con validaciones
                     numero_lote = st.text_input(
                         "🏷️ Número de Lote *",
                         placeholder="LOT-2025-001",
-                        help="Identificador único del lote del proveedor (formato recomendado: LOT-YYYY-XXX)"
+                        help="Identificador único del lote del proveedor (formato recomendado: LOT-YYYY-XXX)",
+                        key="tab5_numero_lote",
                     )
-                    
-                    # Validación en tiempo real del formato de lote
+
                     if numero_lote and not numero_lote.startswith("LOT-"):
                         st.warning("⚠️ Formato recomendado: LOT-YYYY-XXX")
-                    
-                    # Cantidad con validaciones inteligentes
-                    medicamento_seleccionado = next((med for med in medicamentos_data if med['id'] == selected_medicamento_id), None)
+
+                    medicamento_seleccionado = next(
+                        (med for med in medicamentos_data if med.get("id") == selected_medicamento_id), None
+                    )
                     cantidad_sugerida = 100
-                    
+
                     if medicamento_seleccionado:
-                        categoria = medicamento_seleccionado.get('categoria', '')
-                        # Sugerir cantidades según la categoría
-                        if categoria in ['Analgésico', 'AINE']:
+                        categoria = medicamento_seleccionado.get("categoria", "")
+                        if categoria in ["Analgésico", "AINE"]:
                             cantidad_sugerida = 200
-                        elif categoria == 'Antibiótico':
+                        elif categoria == "Antibiótico":
                             cantidad_sugerida = 150
-                        elif categoria == 'Cardiovascular':
+                        elif categoria == "Cardiovascular":
                             cantidad_sugerida = 100
-                    
+
                     cantidad = st.number_input(
                         "📦 Cantidad *",
                         min_value=1,
-                        value=cantidad_sugerida,
+                        value=int(cantidad_sugerida),
                         step=1,
-                        help=f"Cantidad sugerida para {medicamento_seleccionado.get('categoria', 'esta categoría') if medicamento_seleccionado else 'este medicamento'}: {cantidad_sugerida}"
+                        help=f"Cantidad sugerida: {cantidad_sugerida}",
+                        key="tab5_cantidad",
                     )
-                    
-                    # Fecha de vencimiento con validaciones avanzadas
+
                     fecha_vencimiento = st.date_input(
                         "📅 Fecha de Vencimiento *",
                         value=datetime.now().date() + timedelta(days=365),
-                        min_value=datetime.now().date() + timedelta(days=30),  # Mínimo 30 días
-                        help="Fecha de vencimiento del lote (mínimo 30 días desde hoy)"
+                        min_value=datetime.now().date() + timedelta(days=30),
+                        help="Fecha de vencimiento del lote (mínimo 30 días desde hoy)",
+                        key="tab5_fecha_vencimiento",
                     )
-                    
-                    # Alerta de vencimiento
+
                     dias_hasta_venc = (fecha_vencimiento - datetime.now().date()).days
                     if dias_hasta_venc < 90:
                         st.warning(f"⚠️ Lote con vencimiento próximo: {dias_hasta_venc} días")
-                    elif dias_hasta_venc > 1095:  # 3 años
+                    elif dias_hasta_venc > 1095:
                         st.info(f"ℹ️ Lote con vida útil extendida: {dias_hasta_venc} días")
-                    
+
                     # Costo por unidad (para roles autorizados)
                     if user_role in ["admin", "gerente"]:
                         costo_unitario = st.number_input(
                             "💰 Costo Unitario",
                             min_value=0.0,
-                            value=medicamento_seleccionado.get('precio_compra', 10.0) if medicamento_seleccionado else 10.0,
+                            value=safe_float(medicamento_seleccionado.get("precio_compra"), 10.0) if medicamento_seleccionado else 10.0,
                             step=0.1,
-                            help="Costo de compra por unidad"
+                            format="%.2f",
+                            help="Costo de compra por unidad",
+                            key="tab5_costo_unitario",
                         )
                     else:
-                        costo_unitario = medicamento_seleccionado.get('precio_compra', 10.0) if medicamento_seleccionado else 10.0
-                
-                # Sección de proveedor
+                        costo_unitario = safe_float(medicamento_seleccionado.get("precio_compra"), 10.0) if medicamento_seleccionado else 10.0
+
+                # ========== PROVEEDOR ==========
                 st.markdown("### 🏭 Información del Proveedor")
-                
+
                 col_prov1, col_prov2 = st.columns(2)
-                
+
                 with col_prov1:
-                    # Selector de proveedor con opción de añadir nuevo
                     proveedores_data = api._make_request("/proveedores")
-                    if proveedores_data:
+
+                    selected_proveedor_id = None
+                    selected_proveedor_display = None
+
+                    if not proveedores_data:
+                        st.warning("⚠️ Proveedores no disponibles (modo demo). Captura el nombre manualmente.")
+                        selected_proveedor_id = "manual"
+                    else:
                         proveedor_options = {
-                            f"{prov['codigo']} - {prov['nombre']}": prov['id'] 
+                            f"{prov.get('codigo','') or 'PROV'} - {prov.get('nombre','Sin nombre')}": prov["id"]
                             for prov in proveedores_data
                         }
                         proveedor_options["➕ Agregar Nuevo Proveedor"] = "new"
-                        
+
                         selected_proveedor_display = st.selectbox(
                             "🏭 Proveedor *",
                             options=list(proveedor_options.keys()),
-                            help="Seleccionar proveedor registrado o agregar nuevo"
+                            help="Seleccionar proveedor registrado o agregar nuevo",
+                            key="prov_selector_tab5",
                         )
-                        
                         selected_proveedor_id = proveedor_options[selected_proveedor_display]
-                    else:
-                        st.error("❌ No se pudieron cargar los proveedores")
-                        selected_proveedor_id = None
-                        st.stop()
-                
+
                 with col_prov2:
-                    # Campos para nuevo proveedor (si se selecciona)
-                    if selected_proveedor_id == "new":
+                    if selected_proveedor_id == "manual":
+                        proveedor_manual = st.text_input(
+                            "🏭 Proveedor (manual) *",
+                            placeholder="Proveedor Demo S.A. de C.V.",
+                            key="prov_manual_tab5",
+                        )
+                        nuevo_proveedor_nombre = ""
+                        nuevo_proveedor_codigo = ""
+
+                    elif selected_proveedor_id == "new":
                         nuevo_proveedor_nombre = st.text_input(
                             "📝 Nombre del Nuevo Proveedor:",
-                            placeholder="Farmacéuticos Unidos S.A."
+                            placeholder="Farmacéuticos Unidos S.A.",
+                            key="prov_new_nombre_tab5",
                         )
                         nuevo_proveedor_codigo = st.text_input(
                             "🏷️ Código del Proveedor:",
-                            placeholder="FARM001"
+                            placeholder="FARM001",
+                            key="prov_new_codigo_tab5",
                         )
+                        proveedor_manual = ""
+
                     else:
+                        proveedor_manual = ""
                         nuevo_proveedor_nombre = ""
                         nuevo_proveedor_codigo = ""
-                
-                # Información adicional
+
+                # ========== INFO ADICIONAL ==========
                 if user_role in ["admin", "gerente", "farmaceutico"]:
                     with st.expander("📋 Información Adicional (Opcional)"):
                         col_extra1, col_extra2 = st.columns(2)
-                        
+
                         with col_extra1:
                             ubicacion_almacen = st.text_input(
                                 "📍 Ubicación en Almacén:",
                                 placeholder="A1-05",
-                                help="Estantería y posición donde se almacenará"
+                                help="Estantería y posición donde se almacenará",
+                                key="tab5_ubicacion",
                             )
-                            
+
                             temperatura_almacen = st.selectbox(
                                 "🌡️ Condiciones de Almacenamiento:",
-                                options=["Ambiente (15-30°C)", "Refrigerado (2-8°C)", "Congelado (-18°C)", "Controlado (20-25°C)"]
+                                options=["Ambiente (15-30°C)", "Refrigerado (2-8°C)", "Congelado (-18°C)", "Controlado (20-25°C)"],
+                                key="tab5_temperatura",
                             )
-                        
+
                         with col_extra2:
                             observaciones = st.text_area(
                                 "📝 Observaciones:",
                                 placeholder="Notas especiales sobre el lote...",
-                                height=100
+                                height=100,
+                                key="tab5_observaciones",
                             )
-                            
+
                             if user_role == "farmaceutico":
                                 validacion_farmaceutica = st.checkbox(
                                     "✅ Validación Farmacéutica Completada",
-                                    help="Confirmar que el lote cumple con los estándares de calidad"
+                                    help="Confirmar que el lote cumple con los estándares de calidad",
+                                    key="tab5_validacion_farmaceutica",
                                 )
                             else:
                                 validacion_farmaceutica = True
-                
+                else:
+                    ubicacion_almacen = ""
+                    temperatura_almacen = "Ambiente (15-30°C)"
+                    observaciones = ""
+                    validacion_farmaceutica = True
+
                 st.markdown("---")
-                
-                # Botón de agregar al carrito con validaciones
+
                 submitted = st.form_submit_button(
-                    "🛒 Agregar al Carrito", 
+                    "🛒 Agregar al Carrito",
                     use_container_width=True,
-                    type="secondary"
+                    type="secondary",
                 )
-                
+
                 if submitted:
-                    # Validaciones avanzadas
                     errores = []
-                    
+
                     # Validaciones básicas
                     if not numero_lote:
                         errores.append("Número de lote es requerido")
@@ -2917,1287 +3050,1295 @@ if tab_mapping[4] is not None:  # Si la pestaña está disponible
                         errores.append("Cantidad debe ser mayor a 0")
                     if dias_hasta_venc < 30:
                         errores.append("La fecha de vencimiento debe ser al menos 30 días desde hoy")
-                    
+
                     # Validaciones de proveedor
-                    if selected_proveedor_id == "new":
-                        if not nuevo_proveedor_nombre or not nuevo_proveedor_codigo:
+                    if selected_proveedor_id == "manual":
+                        if not proveedor_manual.strip():
+                            errores.append("Proveedor (manual) es requerido")
+                    elif selected_proveedor_id == "new":
+                        if not nuevo_proveedor_nombre.strip() or not nuevo_proveedor_codigo.strip():
                             errores.append("Nombre y código del nuevo proveedor son requeridos")
                     elif not selected_proveedor_id:
                         errores.append("Debe seleccionar un proveedor")
-                    
+
                     # Validación farmacéutica
                     if user_role == "farmaceutico" and not validacion_farmaceutica:
                         errores.append("Se requiere validación farmacéutica para proceder")
-                    
-                    # Verificar duplicados de lote
-                    numeros_lotes_carrito = [item['numero_lote'] for item in st.session_state.carrito_lotes]
+
+                    # Verificar duplicados en carrito
+                    numeros_lotes_carrito = [item.get("numero_lote") for item in st.session_state.carrito_lotes]
                     if numero_lote in numeros_lotes_carrito:
                         errores.append("Este número de lote ya está en el carrito")
-                    
-                    # Validaciones de cantidad según categoría
+
+                    # Validaciones de cantidad por categoría
                     if medicamento_seleccionado:
-                        categoria = medicamento_seleccionado.get('categoria', '')
-                        if categoria == 'Cardiovascular' and cantidad > 500:
+                        categoria = medicamento_seleccionado.get("categoria", "")
+                        if categoria == "Cardiovascular" and cantidad > 500:
                             errores.append("Cantidad muy alta para medicamentos cardiovasculares (máximo 500)")
-                        elif categoria == 'Antibiótico' and cantidad > 300:
+                        elif categoria == "Antibiótico" and cantidad > 300:
                             errores.append("Cantidad muy alta para antibióticos (máximo 300)")
-                    
+
                     if errores:
                         for error in errores:
                             st.error(f"❌ {error}")
                     else:
-                        # Procesar nuevo proveedor si es necesario
-                        if selected_proveedor_id == "new":
-                            # Crear nuevo proveedor
-                            nuevo_proveedor_data = {
-                                "codigo": nuevo_proveedor_codigo,
-                                "nombre": nuevo_proveedor_nombre,
-                                "contacto": "Por definir",
-                                "telefono": "Por definir",
-                                "email": "Por definir"
-                            }
-                            
-                            # Simular creación (en producción sería una llamada a la API)
-                            selected_proveedor_id = 999  # ID temporal
-                            proveedor_final = nuevo_proveedor_nombre
+                        # Determinar proveedor_final
+                        if selected_proveedor_id == "manual":
+                            proveedor_final = proveedor_manual.strip()
+                        elif selected_proveedor_id == "new":
+                            # En producción: POST /proveedores
+                            selected_proveedor_id = 999  # temporal demo
+                            proveedor_final = nuevo_proveedor_nombre.strip()
                         else:
-                            proveedor_final = selected_proveedor_display.split(" - ")[1] if " - " in selected_proveedor_display else "Proveedor"
-                        
-                        # Obtener datos del medicamento seleccionado
-                        selected_med_data = next((med for med in medicamentos_data if med['id'] == selected_medicamento_id), None)
-                        
-                        # Calcular valor total del lote
-                        valor_total_lote = cantidad * costo_unitario
-                        
-                        # Agregar al carrito con información completa
+                            proveedor_final = (
+                                selected_proveedor_display.split(" - ")[1]
+                                if selected_proveedor_display and " - " in selected_proveedor_display
+                                else "Proveedor"
+                            )
+
+                        selected_med_data = next(
+                            (med for med in medicamentos_data if med.get("id") == selected_medicamento_id), None
+                        )
+
+                        valor_total_lote = float(cantidad) * float(costo_unitario)
+
                         nuevo_lote = {
                             "medicamento_id": selected_medicamento_id,
                             "medicamento_nombre": selected_medicamento_display,
                             "sucursal_id": selected_sucursal_id,
-                            "sucursal_nombre": selected_sucursal_display.replace("🏥 ", ""),
+                            "sucursal_nombre": selected_sucursal_display.replace("🏥 ", "") if selected_sucursal_display else "",
                             "numero_lote": numero_lote,
-                            "cantidad": cantidad,
+                            "cantidad": int(cantidad),
                             "fecha_vencimiento": fecha_vencimiento.isoformat(),
-                            "fecha_vencimiento_display": fecha_vencimiento.strftime('%d/%m/%Y'),
+                            "fecha_vencimiento_display": fecha_vencimiento.strftime("%d/%m/%Y"),
                             "proveedor": proveedor_final,
                             "proveedor_id": selected_proveedor_id,
-                            "dias_hasta_vencimiento": dias_hasta_venc,
-                            "categoria": selected_med_data.get('categoria', 'N/A') if selected_med_data else 'N/A',
-                            "costo_unitario": costo_unitario,
-                            "valor_total": valor_total_lote,
-                            "ubicacion": ubicacion_almacen if 'ubicacion_almacen' in locals() else "A1-01",
-                            "temperatura": temperatura_almacen if 'temperatura_almacen' in locals() else "Ambiente",
-                            "observaciones": observaciones if 'observaciones' in locals() else "",
-                            "validado_por": current_user["nombre"] if user_role == "farmaceutico" else "",
-                            "usuario_ingreso": current_user["nombre"]
+                            "dias_hasta_vencimiento": int(dias_hasta_venc),
+                            "categoria": selected_med_data.get("categoria", "N/A") if selected_med_data else "N/A",
+                            "costo_unitario": float(costo_unitario),
+                            "valor_total": float(valor_total_lote),
+                            "ubicacion": ubicacion_almacen or "A1-01",
+                            "temperatura": temperatura_almacen or "Ambiente",
+                            "observaciones": observaciones or "",
+                            "validado_por": current_user.get("nombre", "") if user_role == "farmaceutico" else "",
+                            "usuario_ingreso": current_user.get("nombre", "DEMO_USER"),
                         }
-                        
+
                         st.session_state.carrito_lotes.append(nuevo_lote)
                         st.success(f"✅ Lote {numero_lote} agregado al carrito")
-                        
-                        # Mostrar alertas según el rol
+
                         if dias_hasta_venc < 90:
                             st.warning(f"⚠️ Lote con vencimiento en {dias_hasta_venc} días - Considerar estrategia de rotación")
-                        
+
                         if valor_total_lote > 10000 and user_role in ["admin", "gerente"]:
                             st.info(f"💰 Lote de alto valor: {format_currency(valor_total_lote)} - Confirmar autorización")
-                        
+
                         st.rerun()
-            
+
             st.markdown("---")
-            
-            # ========== CARRITO DE LOTES MEJORADO ==========
+
+            # ========== CARRITO DE LOTES ==========
             st.subheader("🛒 Lotes por Procesar")
-            
+
             if st.session_state.carrito_lotes:
                 st.markdown(f"**📦 {len(st.session_state.carrito_lotes)} lote(s) en el carrito**")
-                
-                # Crear DataFrame para mostrar con columnas según rol
+
                 df_carrito = pd.DataFrame(st.session_state.carrito_lotes)
-                
-                # Columnas base
+
                 columnas_mostrar = [
-                    'medicamento_nombre', 'numero_lote', 'cantidad', 
-                    'fecha_vencimiento_display', 'proveedor', 'categoria'
+                    "medicamento_nombre",
+                    "numero_lote",
+                    "cantidad",
+                    "fecha_vencimiento_display",
+                    "proveedor",
+                    "categoria",
                 ]
-                
-                # Columnas adicionales según rol
+
                 if user_role in ["admin", "gerente"]:
-                    columnas_mostrar.extend(['sucursal_nombre', 'valor_total'])
-                
+                    columnas_mostrar.extend(["sucursal_nombre", "valor_total"])
+
                 if user_role in ["admin", "gerente", "farmaceutico"]:
-                    columnas_mostrar.append('ubicacion')
-                
-                # Filtrar columnas que existen
+                    columnas_mostrar.append("ubicacion")
+
                 columnas_disponibles = [col for col in columnas_mostrar if col in df_carrito.columns]
-                
-                # Renombrar columnas para mejor presentación
+
                 column_mapping = {
-                    'medicamento_nombre': 'Medicamento',
-                    'numero_lote': 'Núm. Lote',
-                    'cantidad': 'Cantidad',
-                    'fecha_vencimiento_display': 'Vencimiento',
-                    'proveedor': 'Proveedor',
-                    'categoria': 'Categoría',
-                    'sucursal_nombre': 'Sucursal',
-                    'valor_total': 'Valor Total ($)',
-                    'ubicacion': 'Ubicación'
+                    "medicamento_nombre": "Medicamento",
+                    "numero_lote": "Núm. Lote",
+                    "cantidad": "Cantidad",
+                    "fecha_vencimiento_display": "Vencimiento",
+                    "proveedor": "Proveedor",
+                    "categoria": "Categoría",
+                    "sucursal_nombre": "Sucursal",
+                    "valor_total": "Valor Total ($)",
+                    "ubicacion": "Ubicación",
                 }
-                
-                df_display = df_carrito[columnas_disponibles].copy()
-                df_display = df_display.rename(columns=column_mapping)
-                
-                # Formatear valores monetarios
-                if 'Valor Total ($)' in df_display.columns:
-                    df_display['Valor Total ($)'] = df_display['Valor Total ($)'].apply(lambda x: f"${x:,.2f}")
-                
-                # Mostrar tabla con colores según días hasta vencimiento
-                if user_role in ["admin", "gerente", "farmaceutico"]:
-                    def highlight_vencimiento(row):
-                        idx = df_carrito.index[df_carrito['numero_lote'] == row.name if hasattr(row, 'name') else 0].tolist()
-                        if idx:
-                            dias = df_carrito.loc[idx[0], 'dias_hasta_vencimiento']
-                            if dias < 90:
-                                return ['background-color: #fef3c7'] * len(row)  # Amarillo
-                            elif dias < 30:
-                                return ['background-color: #fee2e2'] * len(row)  # Rojo
-                        return ['background-color: #dcfce7'] * len(row)  # Verde
-                    
-                    styled_df = df_display.style.apply(highlight_vencimiento, axis=1)
-                    st.dataframe(styled_df, use_container_width=True, hide_index=True)
-                else:
-                    st.dataframe(df_display, use_container_width=True, hide_index=True)
-                
-                # Métricas del carrito personalizadas por rol
+
+                df_display = df_carrito[columnas_disponibles].copy().rename(columns=column_mapping)
+
+                if "Valor Total ($)" in df_display.columns:
+                    df_display["Valor Total ($)"] = df_display["Valor Total ($)"].apply(lambda x: f"${float(x):,.2f}")
+
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+
                 col_met1, col_met2, col_met3, col_met4 = st.columns(4)
-                
+
                 with col_met1:
-                    total_unidades = sum(item['cantidad'] for item in st.session_state.carrito_lotes)
+                    total_unidades = sum(int(item.get("cantidad", 0)) for item in st.session_state.carrito_lotes)
                     st.metric("📦 Total Unidades", f"{total_unidades:,}")
-                
+
                 with col_met2:
-                    lotes_proximos = len([item for item in st.session_state.carrito_lotes if item['dias_hasta_vencimiento'] < 90])
+                    lotes_proximos = len([item for item in st.session_state.carrito_lotes if int(item.get("dias_hasta_vencimiento", 999999)) < 90])
                     st.metric("⚠️ Próx. Vencer", lotes_proximos)
-                
+
                 with col_met3:
                     if user_role in ["admin", "gerente"]:
-                        valor_total_carrito = sum(item['valor_total'] for item in st.session_state.carrito_lotes)
+                        valor_total_carrito = sum(float(item.get("valor_total", 0)) for item in st.session_state.carrito_lotes)
                         st.metric("💰 Valor Total", format_currency(valor_total_carrito))
                     else:
-                        sucursales_afectadas = len(set(item['sucursal_id'] for item in st.session_state.carrito_lotes))
+                        sucursales_afectadas = len(set(item.get("sucursal_id") for item in st.session_state.carrito_lotes))
                         st.metric("🏥 Sucursales", sucursales_afectadas)
-                
+
                 with col_met4:
-                    categorias_diferentes = len(set(item['categoria'] for item in st.session_state.carrito_lotes))
+                    categorias_diferentes = len(set(item.get("categoria") for item in st.session_state.carrito_lotes))
                     st.metric("🏷️ Categorías", categorias_diferentes)
-                
-                # Botones de acción del carrito
+
                 col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
-                
+
                 with col_btn1:
-                    if st.button("💾 Guardar Todos los Lotes", use_container_width=True, type="primary"):
-                        # Verificaciones adicionales antes de guardar
-                        lotes_criticos = [l for l in st.session_state.carrito_lotes if l['dias_hasta_vencimiento'] < 30]
-                        
-                        # Variable para controlar si proceder con el guardado
-                        proceder_guardado = True
-                        
-                        if lotes_criticos and user_role != "admin":
-                            st.warning(f"⚠️ {len(lotes_criticos)} lote(s) con vencimiento crítico.")
-                            
-                            # Crear un botón de confirmación para lotes críticos
-                            if st.button("✅ Confirmar Guardado con Lotes Críticos", type="secondary", key="confirmar_criticos"):
-                                proceder_guardado = True
-                            else:
-                                proceder_guardado = False
-                        
-                        if proceder_guardado:
-                            with st.spinner("📦 Procesando todos los lotes..."):
-                                try:
-                                    # Procesar cada lote del carrito
-                                    lotes_exitosos = []
-                                    lotes_fallidos = []
-                                    
-                                    for i, lote in enumerate(st.session_state.carrito_lotes):
-                                        try:
-                                           # Preparar datos del lote compatible con Supabase (ESTRUCTURA CONFIRMADA)
-                                            lote_data = {
-                                                "medicamento_id": lote["medicamento_id"],
-                                                "sucursal_id": lote["sucursal_id"],
-                                                "numero_lote": lote["numero_lote"],
-                                                "cantidad_recibida": lote["cantidad"],
-                                                "cantidad_actual": lote["cantidad"],
-                                                "fecha_vencimiento": lote["fecha_vencimiento"],  # Ya está en formato ISO
-                                                "fecha_recepcion": datetime.now().date().isoformat(),
-                                                "costo_unitario": float(lote.get("costo_unitario", 0.0)),
-                                                # Campos opcionales que veo en tu tabla
-                                                "fabricante": lote.get("proveedor", ""),  # Usar proveedor como fabricante
-                                                "registro_sanitario": f"REG-{lote['numero_lote']}"  # Generar registro temporal
-                                            }
-                                            
-                                            # Debug: mostrar datos que se envían (solo para admin)
-                                            if user_role == "admin":
-                                                print(f"📤 Enviando lote {lote['numero_lote']}: {lote_data}")
-                                            
-                                            # Llamar al endpoint del backend para crear el lote
-                                            resultado = api._make_request("/lotes", method="POST", data=lote_data)
-                                            
-                                            if resultado:
-                                                lotes_exitosos.append({
-                                                    "numero_lote": lote["numero_lote"],
-                                                    "medicamento": lote["medicamento_nombre"],
-                                                    "cantidad": lote["cantidad"]
-                                                })
-                                                print(f"✅ Lote {lote['numero_lote']} guardado exitosamente")
-                                            else:
-                                                lotes_fallidos.append({
-                                                    "numero_lote": lote["numero_lote"],
-                                                    "error": "No se recibió respuesta del servidor"
-                                                })
-                                                print(f"❌ Error guardando lote {lote['numero_lote']}: Sin respuesta")
-                                        
-                                        except Exception as e:
-                                            error_msg = str(e)
-                                            
-                                            # Detectar tipos específicos de error
-                                            if "422" in error_msg:
-                                                error_msg = "Error de validación - Datos incorrectos"
-                                            elif "404" in error_msg:
-                                                error_msg = "Endpoint no encontrado"
-                                            elif "500" in error_msg:
-                                                error_msg = "Error interno del servidor"
-                                            elif "Connection" in error_msg:
-                                                error_msg = "Error de conexión con el servidor"
-                                            
-                                            lotes_fallidos.append({
-                                                "numero_lote": lote["numero_lote"],
-                                                "error": error_msg
-                                            })
-                                            print(f"❌ Error guardando lote {lote['numero_lote']}: {error_msg}")
-                                            
-                                            # Log adicional para admin
-                                            if user_role == "admin":
-                                                print(f"🔧 Error detallado: {str(e)}")
-                                    
-                                    # Mostrar resultados del procesamiento
-                                    if lotes_exitosos:
-                                        st.success(f"✅ **{len(lotes_exitosos)} lote(s) guardado(s) exitosamente:**")
-                                        
-                                        # Mostrar detalles de lotes exitosos
-                                        for lote_ok in lotes_exitosos:
-                                            st.success(f"📦 {lote_ok['numero_lote']} - {lote_ok['medicamento']} ({lote_ok['cantidad']} unidades)")
-                                        
-                                        # Calcular totales para mostrar estadísticas
-                                        total_unidades_guardadas = sum(lote['cantidad'] for lote in lotes_exitosos)
-                                        if user_role in ["admin", "gerente"]:
-                                            valor_total_guardado = sum(l['valor_total'] for l in st.session_state.carrito_lotes if l['numero_lote'] in [lote['numero_lote'] for lote in lotes_exitosos])
-                                            st.info(f"📊 **Resumen:** {total_unidades_guardadas:,} unidades ingresadas por valor de {format_currency(valor_total_guardado)}")
+                    if st.button("💾 Guardar Todos los Lotes", use_container_width=True, type="primary", key="tab5_guardar_todos"):
+                        with st.spinner("📦 Procesando todos los lotes..."):
+                            try:
+                                lotes_exitosos = []
+                                lotes_fallidos = []
+
+                                for lote in st.session_state.carrito_lotes:
+                                    try:
+                                        lote_data = {
+                                            "medicamento_id": int(lote["medicamento_id"]),
+                                            "sucursal_id": int(lote["sucursal_id"]),
+                                            "numero_lote": lote["numero_lote"],
+                                            "cantidad_recibida": int(lote["cantidad"]),
+                                            "cantidad_actual": int(lote["cantidad"]),
+                                            "fecha_vencimiento": lote["fecha_vencimiento"],
+                                            "fecha_recepcion": datetime.now().date().isoformat(),
+                                            "costo_unitario": float(lote.get("costo_unitario", 0.0)),
+                                            "fabricante": lote.get("proveedor", ""),
+                                            "registro_sanitario": f"REG-{lote['numero_lote']}",
+                                        }
+
+                                        resultado = api._make_request("/lotes", method="POST", data=lote_data)
+
+                                        if resultado:
+                                            lotes_exitosos.append(lote["numero_lote"])
                                         else:
-                                            st.info(f"📊 **Resumen:** {total_unidades_guardadas:,} unidades ingresadas al inventario")
-                                        
-                                        # Limpiar carrito de lotes exitosos
-                                        st.session_state.carrito_lotes = [
-                                            lote for lote in st.session_state.carrito_lotes 
-                                            if lote['numero_lote'] not in [lote_ok['numero_lote'] for lote_ok in lotes_exitosos]
-                                        ]
-                                        
-                                        # Limpiar cache para reflejar cambios
-                                        clear_cache_inventario()
-                                        
-                                        # Mostrar celebración si todos fueron exitosos
-                                        if len(lotes_exitosos) == len(st.session_state.carrito_lotes) + len(lotes_exitosos):
-                                            st.balloons()
-                                            st.success("🎉 ¡Todos los lotes fueron procesados exitosamente!")
-                                    
-                                    # Mostrar errores si los hay
-                                    if lotes_fallidos:
-                                        st.error(f"❌ **{len(lotes_fallidos)} lote(s) fallaron:**")
-                                        
-                                        for lote_error in lotes_fallidos:
-                                            st.error(f"🚫 {lote_error['numero_lote']}: {lote_error['error']}")
-                                        
-                                        st.warning("💡 **Recomendaciones:**")
-                                        st.warning("• Verifica que el servidor esté funcionando")
-                                        st.warning("• Revisa que no haya números de lote duplicados")
-                                        st.warning("• Contacta al administrador si el problema persiste")
-                                    
-                                    # Si no hay lotes exitosos ni fallidos, algo salió muy mal
-                                    if not lotes_exitosos and not lotes_fallidos:
-                                        st.error("❌ No se pudo procesar ningún lote. Verifica la conexión con el servidor.")
-                                    
-                                    # Actualizar la interfaz
+                                            lotes_fallidos.append((lote["numero_lote"], "Sin respuesta del servidor"))
+
+                                    except Exception as e:
+                                        lotes_fallidos.append((lote.get("numero_lote", "N/A"), str(e)))
+
+                                if lotes_exitosos:
+                                    st.success(f"✅ {len(lotes_exitosos)} lote(s) guardado(s) exitosamente.")
+                                    st.session_state.carrito_lotes = [
+                                        l for l in st.session_state.carrito_lotes if l.get("numero_lote") not in lotes_exitosos
+                                    ]
+                                    clear_cache_inventario()
                                     st.rerun()
-                                
-                                except Exception as e:
-                                    st.error(f"❌ **Error crítico en el procesamiento:** {str(e)}")
-                                    
-                                    # Información adicional para administradores
-                                    if user_role == "admin":
-                                        st.error(f"🔧 **Detalle técnico:** {str(e)}")
-                                        st.error("📋 **Datos del carrito:**")
-                                        st.json(st.session_state.carrito_lotes)
-                                    
-                                    st.warning("💡 **Posibles soluciones:**")
-                                    st.warning("• Verifica que el servidor FastAPI esté ejecutándose")
-                                    st.warning("• Revisa la conexión a la base de datos")
-                                    st.warning("• Comprueba los logs del servidor para más detalles")
-                
+
+                                if lotes_fallidos:
+                                    st.error(f"❌ {len(lotes_fallidos)} lote(s) fallaron:")
+                                    for num, err in lotes_fallidos:
+                                        st.error(f"🚫 {num}: {err}")
+
+                            except Exception as e:
+                                st.error(f"❌ Error crítico en el procesamiento: {str(e)}")
+
                 with col_btn2:
-                    if st.button("🗑️ Limpiar Carrito", use_container_width=True):
+                    if st.button("🗑️ Limpiar Carrito", use_container_width=True, key="tab5_limpiar_carrito"):
                         st.session_state.carrito_lotes = []
                         st.success("🧹 Carrito limpiado")
                         st.rerun()
-                
+
                 with col_btn3:
-                    # Selector para eliminar lote específico
                     if len(st.session_state.carrito_lotes) > 0:
                         lote_a_eliminar = st.selectbox(
                             "Eliminar:",
                             options=range(len(st.session_state.carrito_lotes)),
                             format_func=lambda x: f"Lote {st.session_state.carrito_lotes[x]['numero_lote']}",
-                            key="selector_eliminar"
+                            key="tab5_selector_eliminar",
                         )
-                        
-                        if st.button("❌", help="Eliminar lote seleccionado"):
+
+                        if st.button("❌", help="Eliminar lote seleccionado", key="tab5_btn_eliminar_uno"):
                             st.session_state.carrito_lotes.pop(lote_a_eliminar)
                             st.success("✅ Lote eliminado del carrito")
                             st.rerun()
-                
-                # Información adicional para farmacéuticos
-                if user_role == "farmaceutico":
-                    st.markdown("---")
-                    st.subheader("⚕️ Validación Farmacéutica")
-                    
-                    lotes_sin_validar = [l for l in st.session_state.carrito_lotes if not l.get('validado_por')]
-                    if lotes_sin_validar:
-                        st.warning(f"⚠️ {len(lotes_sin_validar)} lote(s) requieren validación farmacéutica")
-                    else:
-                        st.success("✅ Todos los lotes han sido validados farmacéuticamente")
-            
+
             else:
                 st.info("🛒 El carrito está vacío. Agrega lotes usando el formulario de arriba.")
                 
-                # Estadísticas personalizadas por rol
-                col_stats1, col_stats2 = st.columns(2)
-                
-                with col_stats1:
-                    if user_role == "farmaceutico":
-                        st.markdown("""
-                        **⚕️ Proceso de Validación Farmacéutica:**
-                        1. Verificar información del medicamento
-                        2. Validar fechas de vencimiento
-                        3. Confirmar condiciones de almacenamiento
-                        4. Completar validación farmacéutica
-                        5. Procesar ingreso al inventario
-                        """)
-                    else:
-                        st.markdown("""
-                        **📋 Proceso de Ingreso:**
-                        1. Llenar formulario de lote completo
-                        2. Validar información del proveedor
-                        3. Hacer clic en "Agregar al Carrito"
-                        4. Revisar lotes en la tabla
-                        5. Confirmar con "Guardar Todos los Lotes"
-                        """)
-                
-                with col_stats2:
-                    # Estadísticas personalizadas por rol
-                    lotes_existentes = api._make_request("/lotes")
-                    if lotes_existentes:
-                        if user_role in ["admin", "gerente"]:
-                            valor_total_inventario = sum([l.get('valor_total', 0) for l in lotes_existentes])
-                            st.markdown(f"""
-                            **📊 Estadísticas del Sistema:**
-                            - **Lotes registrados:** {len(lotes_existentes)}
-                            - **Valor total:** {format_currency(valor_total_inventario)}
-                            - **Última actividad:** Hace 2 horas
-                            """)
-                        else:
-                            st.markdown(f"""
-                            **📊 Estadísticas del Sistema:**
-                            - **Lotes registrados:** {len(lotes_existentes)}
-                            - **Medicamentos diferentes:** {len(set(lote.get('medicamento_id') for lote in lotes_existentes))}
-                            - **Tu última entrada:** {lotes_existentes[-1].get('fecha_ingreso', 'N/A') if lotes_existentes else 'N/A'}
-                            """)
+    # Estadísticas personalizadas por rol
+    col_stats1, col_stats2 = st.columns(2)
+    
+    with col_stats1:
+        if user_role == "farmaceutico":
+            st.markdown("""
+            **⚕️ Proceso de Validación Farmacéutica:**
+            1. Verificar información del medicamento
+            2. Validar fechas de vencimiento
+            3. Confirmar condiciones de almacenamiento
+            4. Completar validación farmacéutica
+            5. Procesar ingreso al inventario
+            """)
+        else:
+            st.markdown("""
+            **📋 Proceso de Ingreso:**
+            1. Llenar formulario de lote completo
+            2. Validar información del proveedor
+            3. Hacer clic en "Agregar al Carrito"
+            4. Revisar lotes en la tabla
+            5. Confirmar con "Guardar Todos los Lotes"
+            """)
 
-# ========== TAB 6: SALIDAS DE INVENTARIO CON PERMISOS ==========
+    with col_stats2:
+        # Estadísticas personalizadas por rol
+        lotes_existentes = api._make_request("/lotes")
+        if lotes_existentes:
+            if user_role in ["admin", "gerente"]:
+                valor_total_inventario = sum([l.get('valor_total', 0) for l in lotes_existentes])
+                st.markdown(f"""
+                **📊 Estadísticas del Sistema:**
+                - **Lotes registrados:** {len(lotes_existentes)}
+                - **Valor total:** {format_currency(valor_total_inventario)}
+                - **Última actividad:** Hace 2 horas
+                """)
+            else:
+                st.markdown(f"""
+                **📊 Estadísticas del Sistema:**
+                - **Lotes registrados:** {len(lotes_existentes)}
+                - **Medicamentos diferentes:** {len(set(lote.get('medicamento_id') for lote in lotes_existentes))}
+                - **Tu última entrada:** {lotes_existentes[-1].get('fecha_ingreso', 'N/A') if lotes_existentes else 'N/A'}
+                """)
+
+# ========== TAB 6: SALIDAS OPERATIVAS (NO VENTAS) ==========
 if tab_mapping[5] is not None:  # Si la pestaña está disponible
     with tab_mapping[5]:
         # Verificar permisos específicos
-        if not auth_manager.check_permission("salidas.limited"):
-            st.error("🚫 No tienes permisos para registrar salidas de inventario")
+        if not user_has("salidas.limited"):
+            st.error("🚫 No tienes permisos para registrar salidas")
+            st.stop()
+
+        st.header("📤 Salidas Operativas de Inventario")
+
+        # Inicializar carrito de salidas (operativas)
+        if "salidas_carrito" not in st.session_state:
+            st.session_state.salidas_carrito = []
+
+        # Determinar sucursal efectiva según rol
+        if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
+            sucursal_effective_id = int(current_user["sucursal_id"])
+            st.info(f"🏥 Operando sobre tu sucursal asignada (ID {sucursal_effective_id})")
         else:
-            st.header("📤 Salidas de Inventario")
-            
-            # Mostrar información específica del rol
-            if user_role == "admin":
-                st.success("👑 **Modo Administrador** - Control total de salidas en todas las sucursales")
-            elif user_role == "gerente":
-                st.info("🏢 **Modo Gerente** - Gestión completa de salidas y transferencias")
-            elif user_role == "farmaceutico":
-                st.info("⚕️ **Modo Farmacéutico** - Control farmacológico de dispensaciones")
-            elif user_role == "empleado":
-                st.info("👤 **Modo Empleado** - Registro de ventas básicas")
-            
-            st.markdown("**Registrar ventas, transferencias y consumos de medicamentos con validaciones**")
-            
-            # Control de cache con botón en header
-            col_header1, col_header2 = st.columns([3, 1])
-            with col_header1:
-                st.markdown("")  # Espaciador
-            with col_header2:
-                if st.button("🔄 Actualizar Datos", help="Limpiar cache y recargar datos", key="refresh_tab6"):
-                    clear_cache_inventario()
-                    st.rerun()
-            
-            # Obtener sucursales según permisos
-            if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
-                # Usuarios no-admin solo pueden hacer salidas de su sucursal
-                sucursales_permitidas = [suc for suc in sucursales_data if suc['id'] == current_user["sucursal_id"]]
-                selected_sucursal_salida_id = current_user["sucursal_id"]
-                st.info(f"📍 Registrando salidas para: **{current_user.get('sucursal_nombre', 'Tu sucursal')}**")
+            sucursal_effective_id = int(selected_sucursal_id or 0)
+            if sucursal_effective_id > 0:
+                st.info(f"🏥 Operando sobre sucursal seleccionada (ID {sucursal_effective_id})")
             else:
-                # Administradores pueden manejar salidas de cualquier sucursal
-                sucursales_permitidas = sucursales_data
-                
-                st.subheader("🏥 Seleccionar Sucursal")
-                
-                sucursal_salida_options = {
-                    f"🏥 {suc['nombre']}": suc['id'] 
-                    for suc in sucursales_permitidas
-                }
-                
-                selected_sucursal_salida_name = st.selectbox(
-                    "Sucursal de origen:",
-                    options=list(sucursal_salida_options.keys()),
-                    key="sucursal_salida_selector",
-                    help="Selecciona la sucursal de donde saldrá el inventario"
-                )
-                
-                selected_sucursal_salida_id = sucursal_salida_options[selected_sucursal_salida_name]
-                
-                # Mostrar información de la sucursal seleccionada
-                sucursal_info = next((s for s in sucursales_data if s['id'] == selected_sucursal_salida_id), None)
-                if sucursal_info:
-                    st.info(f"📍 **{sucursal_info['nombre']}** seleccionada")
-            
-            if not sucursales_permitidas:
-                st.error("❌ No tienes sucursales asignadas para registro de salidas.")
+                st.info("🏥 Operando sobre todas las sucursales (vista consolidada)")
+
+        # Cargar inventario visible para el usuario
+        inventario_data = get_inventario_data_for_user(user_role, current_user, sucursal_effective_id, api)
+        if not inventario_data:
+            st.warning("📦 No hay inventario disponible para registrar salidas.")
+            st.stop()
+
+        df_inv = pd.DataFrame(inventario_data)
+
+        # Selección de medicamento
+        st.subheader("1) Selecciona el producto")
+        if "medicamento_id" not in df_inv.columns:
+            st.error("❌ El inventario no trae 'medicamento_id'. Revisa tu vista/endpoint.")
+            st.stop()
+
+        nombre_col = "nombre" if "nombre" in df_inv.columns else None
+        cat_col = "categoria" if "categoria" in df_inv.columns else None
+
+        df_inv_unique = df_inv.drop_duplicates(subset=["medicamento_id"]).copy()
+
+        def _label_row(row):
+            parts = []
+            if nombre_col:
+                parts.append(str(row.get(nombre_col, "")).strip())
+            else:
+                parts.append(f"Medicamento {row['medicamento_id']}")
+            if cat_col and row.get(cat_col) not in (None, "", "nan"):
+                parts.append(f"({row.get(cat_col)})")
+            return " ".join(parts).strip()
+
+        options = df_inv_unique["medicamento_id"].tolist()
+        labels = {
+            mid: _label_row(df_inv_unique[df_inv_unique["medicamento_id"] == mid].iloc[0])
+            for mid in options
+        }
+
+        selected_medicamento_id = st.selectbox(
+            "💊 Producto",
+            options=options,
+            format_func=lambda x: labels.get(x, str(x)),
+            key="tab6_salida_medicamento_id",
+        )
+
+        # Determinar sucursal para lotes: si es 0 (todas), pedimos seleccionar una
+        if sucursal_effective_id <= 0:
+            st.subheader("2) Selecciona sucursal (requerida para lotes)")
+            sucursales_data = normalize_sucursales(api._make_request("/sucursales"))
+            if not sucursales_data:
+                st.error("❌ No se pudieron cargar sucursales.")
                 st.stop()
-            
-            # Inicializar session state para salidas
-            if 'salidas_carrito' not in st.session_state:
-                st.session_state.salidas_carrito = []
-            if 'selected_sucursal_salida' not in st.session_state:
-                st.session_state.selected_sucursal_salida = None
-            if 'selected_medicamento_salida' not in st.session_state:
-                st.session_state.selected_medicamento_salida = None
-            
-            st.session_state.selected_sucursal_salida = selected_sucursal_salida_id
-            
-            # Mostrar métricas de la sucursal desde cache
-            col_met1, col_met2, col_met3 = st.columns(3)
-            
-            with st.spinner("📊 Cargando métricas..."):
-                metricas = get_metricas_sucursal_cached(selected_sucursal_salida_id)
-            
-            with col_met1:
-                st.metric("💊 Medicamentos", metricas.get('total_medicamentos', 0))
-            with col_met2:
-                st.metric("📦 Stock Total", f"{metricas.get('total_stock', 0):,}")
-            with col_met3:
-                if user_role in ["admin", "gerente"]:
-                    st.metric("💰 Valor Total", f"${metricas.get('valor_total_inventario', 0):,.2f}")
-                else:
-                    st.metric("⚠️ Stock Bajo", metricas.get('alertas_stock', 0))
-            
-            st.markdown("---")
-            
-            # Obtener medicamentos disponibles desde cache optimizado
-            st.subheader("💊 Medicamentos Disponibles")
-            
-            with st.spinner("🔄 Cargando inventario..."):
-                inventario_sucursal = get_inventario_sucursal_cached(selected_sucursal_salida_id)
-            
-            if not inventario_sucursal:
-                st.warning(f"⚠️ No se encontró inventario para la sucursal seleccionada.")
-                st.stop()
-            
-            # Los medicamentos ya vienen filtrados con stock > 0 desde el endpoint optimizado
-            medicamentos_disponibles = inventario_sucursal
-            
-            if not medicamentos_disponibles:
-                st.warning("⚠️ No hay medicamentos con stock disponible en esta sucursal.")
-                st.stop()
-            
-            # Filtros adicionales para farmacéuticos
-            if user_role == "farmaceutico":
-                col_filter1, col_filter2 = st.columns(2)
-                
-                with col_filter1:
-                    categoria_filter = st.selectbox(
-                        "🏷️ Filtrar por Categoría:",
-                        options=["Todas"] + list(set([med.get('categoria', 'Sin categoría') for med in medicamentos_disponibles]))
-                    )
-                
-                with col_filter2:
-                    prescripcion_filter = st.selectbox(
-                        "📋 Tipo de Dispensación:",
-                        options=["Todas", "Con Receta Médica", "Venta Libre", "Uso Interno"]
-                    )
-                
-                # Aplicar filtros
-                if categoria_filter != "Todas":
-                    medicamentos_disponibles = [med for med in medicamentos_disponibles if med.get('categoria') == categoria_filter]
-            
-            # Selector de medicamento
-            medicamento_salida_options = {
-                f"💊 {med.get('nombre', 'Sin nombre')} (Stock: {med.get('stock_actual', 0)}) - {med.get('categoria', 'N/A')}": med['medicamento_id']
-                for med in medicamentos_disponibles
-            }
-            
-            selected_medicamento_salida_name = st.selectbox(
-                "Medicamento:",
-                options=list(medicamento_salida_options.keys()),
-                key="medicamento_salida_selector",
-                help="Medicamentos con stock disponible en la sucursal"
+
+            suc_opts = {f"🏥 {s['nombre']}": s["id"] for s in sucursales_data}
+            suc_name = st.selectbox(
+                "Sucursal",
+                list(suc_opts.keys()),
+                key="tab6_salida_sucursal_selector",
             )
-            
-            selected_medicamento_salida_id = medicamento_salida_options[selected_medicamento_salida_name]
-            st.session_state.selected_medicamento_salida = selected_medicamento_salida_id
-            
-            # Obtener información del medicamento seleccionado
-            medicamento_info = next((med for med in medicamentos_disponibles if med['medicamento_id'] == selected_medicamento_salida_id), None)
-            
-            if medicamento_info:
-                col_info1, col_info2, col_info3, col_info4 = st.columns(4)
-                
-                with col_info1:
-                    stock_actual = medicamento_info.get('stock_actual', 0)
-                    stock_minimo = medicamento_info.get('stock_minimo', 0)
-                    st.metric("📦 Stock Actual", f"{stock_actual}", delta=f"Min: {stock_minimo}")
-                
-                with col_info2:
-                    st.metric("⚠️ Stock Mínimo", f"{stock_minimo}")
-                
-                with col_info3:
-                    if user_role in ["admin", "gerente", "farmaceutico"]:
-                        precio_venta = medicamento_info.get('precio_venta', 0)
-                        st.metric("💰 Precio Venta", f"${precio_venta:.2f}")
-                    else:
-                        st.metric("🏷️ Categoría", medicamento_info.get('categoria', 'N/A'))
-                
-                with col_info4:
-                    ubicacion = medicamento_info.get('ubicacion', 'N/A')
-                    st.metric("📍 Ubicación", ubicacion)
-                
-                # Alertas específicas por rol
-                if stock_actual <= stock_minimo:
-                    if user_role == "farmaceutico":
-                        st.error(f"🚨 **STOCK CRÍTICO**: {medicamento_info.get('nombre')} requiere reposición inmediata")
-                    else:
-                        st.warning(f"⚠️ Stock bajo para {medicamento_info.get('nombre')}")
-            
-            st.markdown("---")
-            
-            # Obtener lotes disponibles desde cache optimizado
-            st.subheader("📋 Lotes Disponibles")
-            
-            with st.spinner("🔄 Cargando lotes..."):
-                lotes_medicamento = get_lotes_medicamento_cached(
-                    selected_medicamento_salida_id, 
-                    selected_sucursal_salida_id
+            sucursal_for_lotes = int(suc_opts[suc_name])
+        else:
+            sucursal_for_lotes = int(sucursal_effective_id)
+
+        # Cargar lotes del medicamento
+        st.subheader("3) Selecciona el lote y registra la salida")
+        lotes = get_lotes_medicamento_cached(int(selected_medicamento_id), int(sucursal_for_lotes))
+
+        if not lotes:
+            st.warning("📦 No hay lotes disponibles para este producto/sucursal.")
+            st.info("Tip demo: registra primero un ingreso (lote) en '📥 Ingreso Inventario'.")
+            st.stop()
+
+        lotes_activos = [l for l in lotes if safe_float(l.get("cantidad_actual"), 0) > 0]
+        if not lotes_activos:
+            st.warning("📦 Todos los lotes están sin stock disponible.")
+            st.stop()
+
+        def _lote_label(l):
+            lote_num = l.get("numero_lote") or l.get("lote") or f"ID {l.get('id')}"
+            cant = l.get("cantidad_actual", "N/A")
+            venc = l.get("fecha_vencimiento") or l.get("fecha_caducidad") or "sin fecha"
+            return f"{lote_num} | Stock: {cant} | Vence: {venc}"
+
+        lote_options = [l.get("id") for l in lotes_activos]
+        lote_map = {l.get("id"): l for l in lotes_activos}
+
+        selected_lote_id = st.selectbox(
+            "📦 Lote",
+            options=lote_options,
+            format_func=lambda x: _lote_label(lote_map.get(x, {})),
+            key="tab6_salida_lote_id",
+        )
+
+        lote_sel = lote_map.get(selected_lote_id, {})
+        stock_lote = int(safe_float(lote_sel.get("cantidad_actual"), 0))
+
+        # ✅ Salidas operativas (ventas se van a Tab 7)
+        tipos_disponibles = ["Merma", "Transferencia", "Ajuste", "Consumo interno"]
+
+        # Para transferencias, precargamos sucursales destino (si aplica)
+        sucursales_all = normalize_sucursales(api._make_request("/sucursales")) or []
+        suc_dest_opts = {f"🏥 {s['nombre']}": s["id"] for s in sucursales_all if int(s.get("id", 0)) != int(sucursal_for_lotes)}
+
+        with st.form("form_salida_operativa"):
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                cantidad_salida = st.number_input(
+                    "Cantidad a retirar",
+                    min_value=1,
+                    max_value=max(stock_lote, 1),
+                    step=1,
+                    value=1,
+                    help=f"Stock disponible en lote: {stock_lote}",
+                    key="tab6_cantidad_salida",
                 )
-            
-            if lotes_medicamento:
-                # Mostrar tabla de lotes disponibles con información según rol
-                df_lotes = pd.DataFrame(lotes_medicamento)
-                
-                # Columnas según permisos
-                if user_role in ["admin", "gerente", "farmaceutico"]:
-                    columnas_mostrar = ['numero_lote', 'cantidad_actual', 'fecha_vencimiento', 'fecha_recepcion', 'proveedor']
+
+            with col2:
+                tipo_salida = st.selectbox(
+                    "Tipo de salida",
+                    options=tipos_disponibles,
+                    key="tab6_tipo_salida",
+                )
+
+            with col3:
+                motivo_salida = st.text_input(
+                    "Motivo/Referencia (opcional)",
+                    placeholder="Nota/Referencia...",
+                    key="tab6_motivo_salida",
+                )
+
+            sucursal_destino_id = None
+            if tipo_salida == "Transferencia":
+                st.markdown("**Sucursal destino (requerida para transferencia)**")
+                if not suc_dest_opts:
+                    st.warning("⚠️ No hay sucursales disponibles para transferir (o solo existe una).")
                 else:
-                    columnas_mostrar = ['numero_lote', 'cantidad_actual', 'fecha_vencimiento']
-                
-                columnas_disponibles = [col for col in columnas_mostrar if col in df_lotes.columns]
-                
-                if columnas_disponibles:
-                    df_lotes_display = df_lotes[columnas_disponibles].copy()
-                    
-                    # Renombrar columnas para mejor presentación
-                    column_mapping = {
-                        'numero_lote': 'Número de Lote',
-                        'cantidad_actual': 'Cantidad Disponible',
-                        'fecha_vencimiento': 'Fecha Vencimiento',
-                        'fecha_recepcion': 'Fecha Recepción',
-                        'proveedor': 'Proveedor'
-                    }
-                    
-                    df_lotes_display = df_lotes_display.rename(columns=column_mapping)
-                    
-                    # Colorear según fecha de vencimiento para farmacéuticos
-                    if user_role == "farmaceutico":
-                        def highlight_vencimiento(row):
-                            try:
-                                fecha_venc = pd.to_datetime(row['Fecha Vencimiento']).date()
-                                dias_restantes = (fecha_venc - datetime.now().date()).days
-                                if dias_restantes < 30:
-                                    return ['background-color: #fee2e2'] * len(row)  # Rojo
-                                elif dias_restantes < 90:
-                                    return ['background-color: #fef3c7'] * len(row)  # Amarillo
-                                else:
-                                    return ['background-color: #dcfce7'] * len(row)  # Verde
-                            except:
-                                return [''] * len(row)
-                        
-                        styled_df = df_lotes_display.style.apply(highlight_vencimiento, axis=1)
-                        st.dataframe(styled_df, use_container_width=True, hide_index=True)
-                    else:
-                        st.dataframe(df_lotes_display, use_container_width=True, hide_index=True)
-                    
-                    # Formulario de salida con validaciones por rol
-                    st.markdown("---")
-                    st.subheader("📝 Registrar Salida")
-                    
-                    with st.form("registro_salida"):
-                        col_form1, col_form2 = st.columns(2)
-                        
-                        with col_form1:
-                            # Selector de lote con información de vencimiento
-                            lote_options = {}
-                            for lote in lotes_medicamento:
-                                try:
-                                    fecha_venc = datetime.strptime(lote.get('fecha_vencimiento', ''), '%Y-%m-%d').date()
-                                    dias_venc = (fecha_venc - datetime.now().date()).days
-                                    
-                                    if dias_venc < 30:
-                                        status_venc = "🔴 Crítico"
-                                    elif dias_venc < 90:
-                                        status_venc = "🟡 Próximo"
-                                    else:
-                                        status_venc = "🟢 Vigente"
-                                    
-                                    lote_display = f"Lote {lote['numero_lote']} (Disp: {lote.get('cantidad_actual', 0)}) {status_venc}"
-                                except:
-                                    lote_display = f"Lote {lote['numero_lote']} (Disp: {lote.get('cantidad_actual', 0)})"
-                                
-                                lote_options[lote_display] = lote['id']
-                            
-                            selected_lote_name = st.selectbox(
-                                "🏷️ Seleccionar Lote:",
-                                options=list(lote_options.keys()),
-                                help="Selecciona el lote considerando fechas de vencimiento (FEFO: First Expire, First Out)"
-                            )
-                            selected_lote_id = lote_options[selected_lote_name]
-                            
-                            # Obtener info del lote seleccionado
-                            lote_info = next((lote for lote in lotes_medicamento if lote['id'] == selected_lote_id), None)
-                            cantidad_disponible = lote_info.get('cantidad_actual', 0) if lote_info else 0
-                            
-                            # Cantidad a sacar con validaciones
-                            cantidad_salida = st.number_input(
-                                "📦 Cantidad:",
-                                min_value=1,
-                                max_value=cantidad_disponible,
-                                value=1,
-                                help=f"Máximo disponible: {cantidad_disponible}"
-                            )
-                            
-                            # Validación de cantidad según rol
-                            if user_role == "empleado" and cantidad_salida > 10:
-                                st.warning("⚠️ Cantidades altas requieren autorización del farmacéutico")
-                        
-                        with col_form2:
-                            # Tipos de salida según permisos
-                            if user_role == "admin":
-                                tipos_disponibles = [
-                                    "Venta", "Transferencia", "Consumo Interno", 
-                                    "Devolución", "Vencimiento", "Ajuste de Inventario",
-                                    "Muestra Médica", "Investigación"
-                                ]
-                            elif user_role == "gerente":
-                                tipos_disponibles = [
-                                    "Venta", "Transferencia", "Consumo Interno", 
-                                    "Devolución", "Vencimiento", "Ajuste de Inventario"
-                                ]
-                            elif user_role == "farmaceutico":
-                                tipos_disponibles = [
-                                    "Venta", "Dispensación", "Consumo Interno", 
-                                    "Devolución", "Vencimiento"
-                                ]
-                            else:  # empleado
-                                tipos_disponibles = ["Venta", "Consumo Interno"]
-                            
-                            tipo_salida = st.selectbox(
-                                "📋 Tipo de Salida:",
-                                options=tipos_disponibles
-                            )
-                            
-                            # Validaciones específicas por tipo y rol
-                            if tipo_salida == "Dispensación" and user_role != "farmaceutico":
-                                st.error("🚫 Solo farmacéuticos pueden registrar dispensaciones")
-                            
-                            # Campos específicos según tipo de salida
-                            destino = ""
-                            if tipo_salida == "Transferencia":
-                                if user_role in ["admin", "gerente"]:
-                                    otras_sucursales = [suc for suc in sucursales_data if suc['id'] != selected_sucursal_salida_id]
-                                    if otras_sucursales:
-                                        destino_options = {f"🏥 {suc['nombre']}": suc['id'] for suc in otras_sucursales}
-                                        destino_name = st.selectbox(
-                                            "🎯 Sucursal Destino:",
-                                            options=list(destino_options.keys())
-                                        )
-                                        destino = destino_name
-                                else:
-                                    st.error("🚫 No tienes permisos para realizar transferencias")
-                            
-                            elif tipo_salida in ["Dispensación", "Venta"] and user_role == "farmaceutico":
-                                requiere_receta = st.checkbox(
-                                    "📋 Requiere Receta Médica",
-                                    help="Marcar si el medicamento requiere prescripción"
-                                )
-                                
-                                if requiere_receta:
-                                    numero_receta = st.text_input(
-                                        "📄 Número de Receta:",
-                                        placeholder="RX-2025-001"
-                                    )
-                                    medico_prescriptor = st.text_input(
-                                        "👨‍⚕️ Médico Prescriptor:",
-                                        placeholder="Dr. Juan Pérez"
-                                    )
-                            
-                            # Observaciones con plantillas según rol
-                            if user_role == "farmaceutico":
-                                plantillas_obs = [
-                                    "Medicamento dispensado según prescripción médica",
-                                    "Paciente informado sobre posología y efectos",
-                                    "Verificada interacción medicamentosa",
-                                    "Personalizar observación..."
-                                ]
-                                obs_plantilla = st.selectbox("📝 Plantilla de Observación:", plantillas_obs)
-                                
-                                if obs_plantilla == "Personalizar observación...":
-                                    observaciones = st.text_area("📝 Observaciones:", placeholder="Información farmacéutica...")
-                                else:
-                                    observaciones = obs_plantilla
-                            else:
-                                observaciones = st.text_area(
-                                    "📝 Observaciones:",
-                                    placeholder="Información adicional sobre la salida..."
-                                )
-                        
-                        # Información adicional para validación
-                        if user_role == "farmaceutico":
-                            with st.expander("⚕️ Validación Farmacéutica"):
-                                col_val1, col_val2 = st.columns(2)
-                                
-                                with col_val1:
-                                    validacion_posologia = st.checkbox("✅ Posología verificada")
-                                    validacion_interacciones = st.checkbox("✅ Interacciones revisadas")
-                                
-                                with col_val2:
-                                    validacion_contraindicaciones = st.checkbox("✅ Contraindicaciones evaluadas")
-                                    validacion_paciente = st.checkbox("✅ Paciente informado")
-                        
-                        # Botón de agregar al carrito
-                        submitted = st.form_submit_button(
-                            "🛒 Agregar al Carrito", 
-                            use_container_width=True,
-                            type="secondary"
-                        )
-                        
-                        if submitted:
-                            # Validaciones avanzadas
-                            errores = []
-                            
-                            if cantidad_salida > cantidad_disponible:
-                                errores.append(f"Cantidad excede el stock disponible ({cantidad_disponible})")
-                            
-                            if tipo_salida == "Dispensación" and user_role != "farmaceutico":
-                                errores.append("Solo farmacéuticos pueden registrar dispensaciones")
-                            
-                            if tipo_salida == "Transferencia" and user_role not in ["admin", "gerente"]:
-                                errores.append("No tienes permisos para realizar transferencias")
-                            
-                            if user_role == "farmaceutico" and tipo_salida in ["Dispensación", "Venta"]:
-                                if 'requiere_receta' in locals() and requiere_receta:
-                                    if not numero_receta or not medico_prescriptor:
-                                        errores.append("Número de receta y médico prescriptor son obligatorios")
-                                
-                                if not all([validacion_posologia, validacion_interacciones, 
-                                          validacion_contraindicaciones, validacion_paciente]):
-                                    errores.append("Todas las validaciones farmacéuticas son obligatorias")
-                            
-                            # Validar días hasta vencimiento
-                            if lote_info:
-                                try:
-                                    fecha_venc = datetime.strptime(lote_info.get('fecha_vencimiento', ''), '%Y-%m-%d').date()
-                                    dias_venc = (fecha_venc - datetime.now().date()).days
-                                    
-                                    if dias_venc < 0:
-                                        errores.append("No se puede dispensar medicamento vencido")
-                                    elif dias_venc < 30 and user_role != "admin":
-                                        errores.append("Medicamento próximo a vencer (requiere autorización especial)")
-                                except:
-                                    pass
-                            
-                            if errores:
-                                for error in errores:
-                                    st.error(f"❌ {error}")
-                            else:
-                                # Agregar al carrito de salidas
-                                precio_unitario = medicamento_info.get('precio_venta', 0) if medicamento_info else 0
-                                
-                                nueva_salida = {
-                                    "sucursal_id": selected_sucursal_salida_id,
-                                    "sucursal_nombre": sucursales_permitidas[0]['nombre'] if len(sucursales_permitidas) == 1 else selected_sucursal_salida_name.replace("🏥 ", ""),
-                                    "medicamento_id": selected_medicamento_salida_id,
-                                    "medicamento_nombre": selected_medicamento_salida_name.split(" (Stock:")[0].replace("💊 ", ""),
-                                    "lote_id": selected_lote_id,
-                                    "numero_lote": lote_info.get('numero_lote', ''),
-                                    "cantidad": cantidad_salida,
-                                    "tipo_salida": tipo_salida,
-                                    "destino": destino,
-                                    "observaciones": observaciones,
-                                    "precio_unitario": precio_unitario,
-                                    "total": cantidad_salida * precio_unitario,
-                                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                    "usuario": current_user["nombre"],
-                                    "rol_usuario": user_role,
-                                    "validado_farmaceuticamente": user_role == "farmaceutico",
-                                    "numero_receta": numero_receta if 'numero_receta' in locals() else "",
-                                    "medico_prescriptor": medico_prescriptor if 'medico_prescriptor' in locals() else ""
-                                }
-                                
-                                st.session_state.salidas_carrito.append(nueva_salida)
-                                st.success(f"✅ Salida agregada: {cantidad_salida} unidades de {nueva_salida['medicamento_nombre']}")
-                                
-                                # Alertas según contexto
-                                if tipo_salida == "Venta" and user_role == "farmaceutico":
-                                    st.info("💊 Recordar informar al paciente sobre posología y efectos adversos")
-                                
-                                # Limpiar cache para reflejar cambios
-                                clear_cache_inventario()
-                                st.rerun()
-                else:
-                    st.info("📊 No hay información detallada de lotes disponible")
+                    suc_dest_name = st.selectbox(
+                        "Sucursal destino",
+                        options=list(suc_dest_opts.keys()),
+                        key="tab6_sucursal_destino",
+                    )
+                    sucursal_destino_id = int(suc_dest_opts[suc_dest_name])
+
+            submitted_salida = st.form_submit_button("➕ Agregar al carrito")
+
+        if submitted_salida:
+            errores_tab6 = []
+
+            if int(cantidad_salida) <= 0:
+                errores_tab6.append("Cantidad inválida.")
+            if int(cantidad_salida) > int(stock_lote):
+                errores_tab6.append("La cantidad excede el stock del lote.")
+            if tipo_salida == "Transferencia" and not sucursal_destino_id:
+                errores_tab6.append("Sucursal destino es requerida para Transferencia.")
+
+            if errores_tab6:
+                for e in errores_tab6:
+                    st.error(f"❌ {e}")
             else:
-                st.warning("⚠️ No hay lotes disponibles para este medicamento en esta sucursal.")
-            
-            # ========== CARRITO DE SALIDAS MEJORADO ==========
-            st.markdown("---")
-            st.subheader("🛒 Salidas por Procesar")
-            
-            if st.session_state.salidas_carrito:
-                st.markdown(f"**📦 {len(st.session_state.salidas_carrito)} salida(s) en el carrito**")
-                
-                # Mostrar tabla del carrito con columnas según rol
-                df_carrito = pd.DataFrame(st.session_state.salidas_carrito)
-                
-                # Columnas base
-                columnas_carrito = ['medicamento_nombre', 'numero_lote', 'cantidad', 'tipo_salida', 'timestamp']
-                
-                # Columnas adicionales según rol
-                if user_role in ["admin", "gerente"]:
-                    columnas_carrito.extend(['destino', 'total'])
-                
-                if user_role == "farmaceutico":
-                    columnas_carrito.extend(['numero_receta', 'validado_farmaceuticamente'])
-                
-                # Filtrar columnas que existen
-                columnas_disponibles = [col for col in columnas_carrito if col in df_carrito.columns]
-                
-                df_carrito_display = df_carrito[columnas_disponibles].copy()
-                
-                # Renombrar columnas
-                column_mapping = {
-                    'medicamento_nombre': 'Medicamento',
-                    'numero_lote': 'Lote',
-                    'cantidad': 'Cantidad',
-                    'tipo_salida': 'Tipo',
-                    'destino': 'Destino',
-                    'total': 'Total ($)',
-                    'timestamp': 'Fecha/Hora',
-                    'numero_receta': 'Receta',
-                    'validado_farmaceuticamente': 'Validado'
+                st.session_state.salidas_carrito.append({
+                    "lote_id": int(selected_lote_id),
+                    "medicamento_id": int(selected_medicamento_id),
+                    "medicamento_nombre": labels.get(selected_medicamento_id, str(selected_medicamento_id)),
+                    "sucursal_id": int(sucursal_for_lotes),
+                    "cantidad": int(cantidad_salida),
+                    "tipo_salida": str(tipo_salida),
+                    "sucursal_destino_id": int(sucursal_destino_id) if sucursal_destino_id else None,
+                    "motivo": str(motivo_salida) if motivo_salida else None,
+                })
+                st.success("✅ Agregado al carrito")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("🛒 Carrito de Salidas Operativas")
+
+        if not st.session_state.salidas_carrito:
+            st.info("Aún no hay salidas en el carrito.")
+        else:
+            df_carrito = pd.DataFrame(st.session_state.salidas_carrito)
+            st.dataframe(df_carrito, use_container_width=True, hide_index=True)
+
+            col_btn1, col_btn2 = st.columns(2)
+
+            with col_btn1:
+                if st.button("💾 Procesar Todas las Salidas", use_container_width=True, type="primary", key="tab6_procesar_salidas"):
+                    ok_count = 0
+                    fail_count = 0
+
+                    for item in list(st.session_state.salidas_carrito):
+                        payload = {
+                            "lote_id": int(item["lote_id"]),
+                            "cantidad": int(item["cantidad"]),
+                            "tipo_salida": str(item["tipo_salida"]),
+                            "motivo": item.get("motivo"),
+                        }
+                        # Transferencias: mandamos sucursal_destino_id si viene
+                        if item.get("sucursal_destino_id") is not None:
+                            payload["sucursal_destino_id"] = int(item["sucursal_destino_id"])
+
+                        resp = api._make_request("/salidas/lote", method="POST", data=payload)
+                        if resp:
+                            ok_count += 1
+                        else:
+                            fail_count += 1
+
+                    if ok_count:
+                        st.success(f"✅ Salidas registradas: {ok_count}")
+                    if fail_count:
+                        st.error(f"❌ Fallaron: {fail_count}")
+
+                    st.session_state.salidas_carrito = []
+                    st.cache_data.clear()
+                    st.rerun()
+
+            with col_btn2:
+                if st.button("🗑️ Limpiar Carrito", use_container_width=True, key="tab6_limpiar_carrito"):
+                    st.session_state.salidas_carrito = []
+                    st.success("🧹 Carrito limpiado")
+                    st.rerun()
+
+        # ===== Bloque de notas / información adicional =====
+        st.markdown("---")
+        st.subheader("📝 Notas")
+
+        if user_role == "farmaceutico":
+            st.info("💡 Tip Farmacéutico: aplica FEFO (First Expire, First Out) al seleccionar lotes.")
+        elif user_role in ["admin", "gerente"]:
+            st.info("💡 Tip Gerencial: monitorea merma y transferencias para optimizar stock entre sucursales.")
+        else:
+            st.info("💡 Tip: registra un motivo cuando sea merma o ajuste para auditoría.")
+
+        st.markdown("### 🔐 Información de Seguridad y Trazabilidad")
+        col_seg1, col_seg2, col_seg3 = st.columns(3)
+
+        with col_seg1:
+            st.info(f"""
+**👤 Usuario Activo:**
+- **Nombre:** {current_user.get('nombre', 'N/A')} {current_user.get('apellido', '')}
+- **Rol:** {get_role_description(user_role)}
+- **Sucursal:** {current_user.get('sucursal_nombre', 'N/A')}
+""")
+
+        with col_seg2:
+            st.info(f"""
+**🕒 Sesión Actual:**
+- **Inicio:** {st.session_state.get('login_time', datetime.now()).strftime('%H:%M')}
+- **Salidas en carrito:** {len(st.session_state.get('salidas_carrito', []))}
+- **Estado:** Activa
+""")
+
+        with col_seg3:
+            st.info(f"""
+**🛡️ Auditoría:**
+- **Última actividad:** {datetime.now().strftime('%H:%M')}
+- **Tenant:** {st.session_state.get('tenant_id', 'N/A')}
+""")
+
+
+# ========== TAB 7: VENTAS ==========
+if len(tab_mapping) > 6 and tab_mapping[6] is not None:
+    with tab_mapping[6]:
+        if not user_has(["ventas.limited", "ventas.full"]):
+            st.error("🚫 No tienes permisos para registrar ventas")
+            st.stop()
+
+        st.header("🧾 Ventas")
+
+        # Carrito de ventas separado
+        if "ventas_carrito" not in st.session_state:
+            st.session_state.ventas_carrito = []
+
+        # Determinar sucursal efectiva
+        if user_role in ["gerente", "farmaceutico", "empleado"] and current_user.get("sucursal_id"):
+            sucursal_effective_id = int(current_user["sucursal_id"])
+            st.info(f"🏥 Vendiendo sobre tu sucursal asignada (ID {sucursal_effective_id})")
+        else:
+            sucursal_effective_id = int(selected_sucursal_id or 0)
+            if sucursal_effective_id > 0:
+                st.info(f"🏥 Vendiendo sobre sucursal seleccionada (ID {sucursal_effective_id})")
+            else:
+                st.warning("⚠️ Para ventas necesitas seleccionar una sucursal.")
+                st.stop()
+
+        inventario_data = get_inventario_data_for_user(user_role, current_user, sucursal_effective_id, api)
+        if not inventario_data:
+            st.warning("📦 No hay inventario disponible para registrar ventas.")
+            st.stop()
+
+        df_inv = pd.DataFrame(inventario_data)
+
+        st.subheader("1) Selecciona el producto")
+        if "medicamento_id" not in df_inv.columns:
+            st.error("❌ El inventario no trae 'medicamento_id'. Revisa tu vista/endpoint.")
+            st.stop()
+
+        nombre_col = "nombre" if "nombre" in df_inv.columns else None
+        cat_col = "categoria" if "categoria" in df_inv.columns else None
+
+        df_inv_unique = df_inv.drop_duplicates(subset=["medicamento_id"]).copy()
+
+        def _label_row(row):
+            parts = []
+            if nombre_col:
+                parts.append(str(row.get(nombre_col, "")).strip())
+            else:
+                parts.append(f"Medicamento {row['medicamento_id']}")
+            if cat_col and row.get(cat_col) not in (None, "", "nan"):
+                parts.append(f"({row.get(cat_col)})")
+            return " ".join(parts).strip()
+
+        options = df_inv_unique["medicamento_id"].tolist()
+        labels = {
+            mid: _label_row(df_inv_unique[df_inv_unique["medicamento_id"] == mid].iloc[0])
+            for mid in options
+        }
+
+        selected_medicamento_id = st.selectbox(
+            "💊 Producto",
+            options=options,
+            format_func=lambda x: labels.get(x, str(x)),
+            key="tab7_venta_medicamento_id",
+        )
+
+        st.subheader("2) Selecciona el lote")
+        lotes = get_lotes_medicamento_cached(int(selected_medicamento_id), int(sucursal_effective_id))
+        if not lotes:
+            st.warning("📦 No hay lotes disponibles para este producto/sucursal.")
+            st.stop()
+
+        lotes_activos = [l for l in lotes if safe_float(l.get("cantidad_actual"), 0) > 0]
+        if not lotes_activos:
+            st.warning("📦 Todos los lotes están sin stock disponible.")
+            st.stop()
+
+        def _lote_label(l):
+            lote_num = l.get("numero_lote") or l.get("lote") or f"ID {l.get('id')}"
+            cant = l.get("cantidad_actual", "N/A")
+            venc = l.get("fecha_vencimiento") or l.get("fecha_caducidad") or "sin fecha"
+            return f"{lote_num} | Stock: {cant} | Vence: {venc}"
+
+        lote_options = [l.get("id") for l in lotes_activos]
+        lote_map = {l.get("id"): l for l in lotes_activos}
+
+        selected_lote_id = st.selectbox(
+            "📦 Lote",
+            options=lote_options,
+            format_func=lambda x: _lote_label(lote_map.get(x, {})),
+            key="tab7_venta_lote_id",
+        )
+
+        lote_sel = lote_map.get(selected_lote_id, {})
+        stock_lote = int(safe_float(lote_sel.get("cantidad_actual"), 0))
+
+        # Precio: se toma desde el catálogo de productos (NO editable en ventas)
+        # Nota: por compatibilidad, el endpoint sigue llamándose /medicamentos; en UI lo mostramos como "productos"
+        productos_catalogo = api._make_request("/medicamentos") or []
+        producto_map = {int(p.get("id")): p for p in productos_catalogo if p.get("id") is not None}
+        producto_sel = producto_map.get(int(selected_medicamento_id), {}) if selected_medicamento_id is not None else {}
+
+        precio_catalogo = safe_float(
+            producto_sel.get("precio_venta")
+            or producto_sel.get("precio")
+            or producto_sel.get("precio_publico")
+            or producto_sel.get("precio_unitario")
+            or 0.0,
+            0.0,
+        )
+
+        # Fallback: si no hay precio en catálogo, usar el del lote (si existe)
+        if float(precio_catalogo) <= 0:
+            precio_catalogo = safe_float(lote_sel.get("precio_unitario"), 0.0)
+
+        precio_unitario = float(precio_catalogo)
+
+        st.subheader("3) Registra la venta")
+        with st.form("form_venta"):
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                cantidad = st.number_input(
+                    "Cantidad",
+                    min_value=1,
+                    max_value=max(stock_lote, 1),
+                    step=1,
+                    value=1,
+                    key="tab7_venta_cantidad",
+                )
+
+            with col2:
+                st.text_input(
+                    "Precio unitario (catálogo)",
+                    value=f"${precio_unitario:,.2f}",
+                    disabled=True,
+                    key="tab7_venta_precio_unitario_ro",
+                    help="El precio se administra en el catálogo de productos (solo Admin).",
+                )
+
+            with col3:
+                metodo_pago = st.selectbox(
+                    "Método de pago",
+                    options=["Efectivo", "Tarjeta", "Transferencia", "Mixto", "Otro"],
+                    key="tab7_venta_metodo_pago",
+                )
+
+            with col4:
+                referencia = st.text_input(
+                    "Ticket/Referencia (opcional)",
+                    placeholder="FOLIO-123 / Ticket...",
+                    key="tab7_venta_referencia",
+                )
+
+            obs = st.text_input(
+                "Observaciones (opcional)",
+                placeholder="Notas…",
+                key="tab7_venta_obs",
+            )
+
+            submitted = st.form_submit_button("➕ Agregar al carrito")
+
+        if submitted:
+            errores_tab7 = []
+            if int(cantidad) <= 0:
+                errores_tab7.append("Cantidad inválida.")
+            if int(cantidad) > int(stock_lote):
+                errores_tab7.append("La cantidad excede el stock del lote.")
+
+            if errores_tab7:
+                for e in errores_tab7:
+                    st.error(f"❌ {e}")
+            else:
+                # Aplicar promoción automática (si existe)
+                promo_pct = 0.0
+                promo_nombre = None
+                promos = st.session_state.get("promociones", [])
+
+                for p in promos:
+                    try:
+                        if not p.get("activa", True):
+                            continue
+                        ids = p.get("producto_ids") or p.get("medicamento_ids") or []
+                        if int(selected_medicamento_id) in [int(x) for x in ids]:
+                            pct = float(safe_float(p.get("descuento_pct"), 0.0))
+                            if pct > promo_pct:
+                                promo_pct = pct
+                                promo_nombre = p.get("nombre") or "Promoción"
+                    except Exception:
+                        continue
+
+                precio_unitario_base = float(precio_unitario)
+                precio_unitario_final = float(precio_unitario_base * (1 - (promo_pct / 100.0)))
+
+                st.session_state.ventas_carrito.append({
+                    "lote_id": int(selected_lote_id),
+                    "medicamento_id": int(selected_medicamento_id),
+                    "producto_id": int(selected_medicamento_id),
+                    "medicamento_nombre": labels.get(selected_medicamento_id, str(selected_medicamento_id)),
+                    "producto_nombre": labels.get(selected_medicamento_id, str(selected_medicamento_id)),
+                    "sucursal_id": int(sucursal_effective_id),
+                    "cantidad": int(cantidad),
+                    "precio_unitario_base": float(precio_unitario_base),
+                    "descuento_pct": float(promo_pct),
+                    "promocion": promo_nombre,
+                    "precio_unitario": float(precio_unitario_final),
+                    "metodo_pago": str(metodo_pago),
+                    "referencia": str(referencia) if referencia else None,
+                    "observaciones": str(obs) if obs else None,
+                })
+                st.success("✅ Venta agregada al carrito")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("🛒 Carrito de Ventas")
+
+        if not st.session_state.ventas_carrito:
+            st.info("Aún no hay ventas en el carrito.")
+        else:
+            df_carrito = pd.DataFrame(st.session_state.ventas_carrito)
+            if "total" not in df_carrito.columns:
+                df_carrito["total"] = df_carrito["cantidad"] * df_carrito["precio_unitario"]
+            st.dataframe(df_carrito, use_container_width=True, hide_index=True)
+
+            col_a, col_b = st.columns(2)
+
+            with col_a:
+                if st.button("💾 Procesar Todas las Ventas", use_container_width=True, type="primary", key="tab7_procesar_ventas"):
+                    ok_count = 0
+                    fail_count = 0
+
+                    for item in list(st.session_state.ventas_carrito):
+                        # Por ahora: usamos el mismo endpoint y marcamos tipo_salida="Venta"
+                        motivo_txt = item.get("referencia")
+                        if item.get("metodo_pago"):
+                            extra = f"Pago={item['metodo_pago']}"
+                            motivo_txt = f"{motivo_txt} | {extra}" if motivo_txt else extra
+                        if item.get("observaciones"):
+                            motivo_txt = f"{motivo_txt} | Obs={item['observaciones']}" if motivo_txt else f"Obs={item['observaciones']}"
+
+                        payload = {
+                            "lote_id": int(item["lote_id"]),
+                            "cantidad": int(item["cantidad"]),
+                            "tipo_salida": "Venta",
+                            "motivo": motivo_txt,
+                        }
+
+                        resp = api._make_request("/salidas/lote", method="POST", data=payload)
+                        if resp:
+                            ok_count += 1
+                        else:
+                            fail_count += 1
+
+                    if ok_count:
+                        st.success(f"✅ Ventas registradas: {ok_count}")
+                    if fail_count:
+                        st.error(f"❌ Fallaron: {fail_count}")
+
+                    st.session_state.ventas_carrito = []
+                    st.cache_data.clear()
+                    st.rerun()
+
+            with col_b:
+                if st.button("🗑️ Limpiar Carrito", use_container_width=True, key="tab7_limpiar_carrito"):
+                    st.session_state.ventas_carrito = []
+                    st.success("🧹 Carrito limpiado")
+                    st.rerun()
+
+        st.markdown("---")
+        st.subheader("📚 Histórico de Ventas (Demo/Producción)")
+
+        # Filtros
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            desde = st.date_input("Desde", value=(datetime.now().date() - timedelta(days=30)), key="tab7_hist_desde")
+        with col_f2:
+            hasta = st.date_input("Hasta", value=datetime.now().date(), key="tab7_hist_hasta")
+        with col_f3:
+            solo_sucursal = st.checkbox("Solo mi sucursal", value=True, key="tab7_hist_solo_sucursal")
+
+        # Intentar traer histórico desde backend
+        ventas_hist = None
+        try:
+            # Si luego creamos /ventas, aquí cambiamos a api._make_request("/ventas")
+            # Por ahora intentamos /salidas y filtramos tipo_salida == "Venta"
+            raw = api._make_request("/salidas")
+            if raw:
+                ventas_hist = raw
+        except Exception:
+            ventas_hist = None
+
+        if not ventas_hist:
+            st.info("ℹ️ Histórico no disponible desde API (/salidas o /ventas). Lo activamos al ajustar main.py.")
+        else:
+            df_hist = pd.DataFrame(ventas_hist)
+
+            # Normalizar columnas típicas si existen
+            # Filtrar por tipo_salida si viene
+            if "tipo_salida" in df_hist.columns:
+                df_hist = df_hist[df_hist["tipo_salida"].astype(str).str.lower().isin(["venta", "dispensación", "dispensacion"])]
+
+            # Filtrar por sucursal si aplica
+            if solo_sucursal and "sucursal_id" in df_hist.columns:
+                df_hist = df_hist[df_hist["sucursal_id"].astype(int) == int(sucursal_effective_id)]
+
+            # Filtrar por fechas si existe fecha_salida
+            if "fecha_salida" in df_hist.columns:
+                df_hist["fecha_salida_dt"] = pd.to_datetime(df_hist["fecha_salida"], errors="coerce").dt.date
+                df_hist = df_hist[(df_hist["fecha_salida_dt"] >= desde) & (df_hist["fecha_salida_dt"] <= hasta)]
+
+            st.dataframe(df_hist, use_container_width=True, hide_index=True)
+
+            # Export CSV
+            csv_hist = df_hist.to_csv(index=False)
+            st.download_button(
+                "⬇️ Exportar histórico (CSV)",
+                data=csv_hist,
+                file_name=f"ventas_historico_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="tab7_export_hist_csv",
+            )
+
+
+
+
+
+# ========== TAB 8: CATÁLOGO DE PRODUCTOS (SOLO ADMIN) ==========
+if tab_mapping[7] is not None:  # Si la pestaña está disponible
+    with tab_mapping[7]:
+        # Verificar permisos específicos
+        if not user_has("productos.manage"):
+            st.error("🚫 No tienes permisos para gestionar el catálogo de productos.")
+        else:
+            st.header("🧩 Catálogo de Productos (Admin)")
+            st.markdown(
+                "Administra **productos**, sus características y su **precio de venta**. "
+                "En el módulo de **Ventas** el precio se toma de aquí (**no editable**)."
+            )
+
+            if user_role == "admin":
+                st.success("👑 **Modo Administrador** - Gestión completa del catálogo de productos")
+
+            # =======================
+            # Helpers
+            # =======================
+            def _get_catalogo_productos():
+                # Preferente: /productos (si el backend ya lo expone)
+                data = api._make_request("/productos")
+                if isinstance(data, list) and len(data) > 0:
+                    return data
+                # Compat: versiones previas usan /medicamentos
+                data2 = api._make_request("/medicamentos")
+                return data2 if isinstance(data2, list) else []
+
+            def _post_producto(payload: dict):
+                # Intento preferente
+                created = api._make_request("/productos", method="POST", data=payload)
+                if created:
+                    return created
+                # Compat: /medicamentos
+                return api._make_request("/medicamentos", method="POST", data=payload)
+
+            def _update_precio(producto_id: int, nuevo_precio: float):
+                # Intento preferente
+                updated = api._make_request(f"/productos/{producto_id}/precio", method="PUT", data={"precio_venta": nuevo_precio})
+                if updated:
+                    return updated
+                # Compat: /medicamentos/{id} (si el backend lo soporta)
+                return api._make_request(f"/medicamentos/{producto_id}", method="PUT", data={"precio_venta": nuevo_precio})
+
+            # =======================
+            # Cargar catálogo (API + fallback local)
+            # =======================
+            productos_api = _get_catalogo_productos()
+
+            # Fallback local (demo / si backend aún no soporta POST/PUT)
+            if "productos_local" not in st.session_state:
+                st.session_state.productos_local = []
+
+            productos_all = []
+            if isinstance(productos_api, list):
+                productos_all.extend(productos_api)
+            productos_all.extend(st.session_state.productos_local)
+
+            st.subheader("📋 Catálogo actual")
+
+            if productos_all:
+                df_prod = pd.DataFrame(productos_all)
+
+                # Normalizar nombres a "producto"
+                # (en backends antiguos aún viene medicamento_id / medicamentos)
+                rename_candidates = {
+                    "medicamento_id": "producto_id",
                 }
-                
-                df_carrito_display = df_carrito_display.rename(columns=column_mapping)
-                
-                # Formatear valores
-                if 'Total ($)' in df_carrito_display.columns:
-                    df_carrito_display['Total ($)'] = df_carrito_display['Total ($)'].apply(lambda x: f"${x:.2f}")
-                
-                if 'Validado' in df_carrito_display.columns:
-                    df_carrito_display['Validado'] = df_carrito_display['Validado'].apply(lambda x: "✅" if x else "⏳")
-                
-                st.dataframe(df_carrito_display, use_container_width=True, hide_index=True)
-                
-                # Métricas del carrito
-                col_met1, col_met2, col_met3, col_met4 = st.columns(4)
-                
-                with col_met1:
-                    total_unidades = sum(item['cantidad'] for item in st.session_state.salidas_carrito)
-                    st.metric("📦 Total Unidades", f"{total_unidades:,}")
-                
-                with col_met2:
-                    if user_role in ["admin", "gerente"]:
-                        total_valor = sum(item['total'] for item in st.session_state.salidas_carrito)
-                        st.metric("💰 Valor Total", f"${total_valor:,.2f}")
-                    else:
-                        tipos_salida = len(set(item['tipo_salida'] for item in st.session_state.salidas_carrito))
-                        st.metric("📋 Tipos de Salida", tipos_salida)
-                
-                with col_met3:
-                    if user_role == "farmaceutico":
-                        validadas = len([item for item in st.session_state.salidas_carrito if item.get('validado_farmaceuticamente', False)])
-                        st.metric("⚕️ Validadas", f"{validadas}/{len(st.session_state.salidas_carrito)}")
-                    else:
-                        medicamentos_diferentes = len(set(item['medicamento_id'] for item in st.session_state.salidas_carrito))
-                        st.metric("💊 Medicamentos", medicamentos_diferentes)
-                
-                with col_met4:
-                    salidas_criticas = len([item for item in st.session_state.salidas_carrito if item['tipo_salida'] in ['Vencimiento', 'Devolución']])
-                    st.metric("🚨 Críticas", salidas_criticas)
-                
-                # Botones de acción según permisos
-                col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
-                
-                with col_btn1:
-                    # Validar permisos antes de procesar
-                    puede_procesar = True
-                    if user_role == "farmaceutico":
-                        sin_validar = [item for item in st.session_state.salidas_carrito if not item.get('validado_farmaceuticamente', False)]
-                        if sin_validar:
-                            puede_procesar = False
-                            st.warning(f"⚠️ {len(sin_validar)} salida(s) sin validación farmacéutica")
-                    
-                    if puede_procesar:
-                        if st.button("💾 Procesar Todas las Salidas", use_container_width=True, type="primary"):
-                             with st.spinner("📦 Procesando salidas..."):
-                                 try:
-                                     # Preparar datos LIMPIOS para el endpoint
-                                     salidas_para_procesar = []
-                                     
-                                     for i, salida in enumerate(st.session_state.salidas_carrito):
-                                         print(f"🔍 DEBUG: Procesando salida {i+1}: {salida}")
-                                         
-                                         # Crear diccionario SOLO con campos necesarios*
-                                         salida_limpia = {
-                                             "sucursal_id": int(salida["sucursal_id"]),
-                                             "medicamento_id": int(salida["medicamento_id"]),
-                                             "lote_id": int(salida["lote_id"]),
-                                             "numero_lote": str(salida.get("numero_lote", "")),
-                                             "cantidad": int(salida["cantidad"]),
-                                             "tipo_salida": str(salida["tipo_salida"]),
-                                             "destino": str(salida.get("destino", "")),
-                                             "observaciones": str(salida.get("observaciones", "")),
-                                             "precio_unitario": float(salida.get("precio_unitario", 0.0)),
-                                             "total": float(salida.get("total", 0.0)),
-                                             "usuario": str(salida.get("usuario", current_user.get("nombre", "Sistema")))
-                                         }
-                                         
-                                         
-                                         # Validar que todos los campos requeridos existen
-                                         campos_requeridos = ["sucursal_id", "medicamento_id", "lote_id", "cantidad", "tipo_salida"]
-                                         campos_faltantes = [campo for campo in campos_requeridos if salida_limpia.get(campo) is None]
-                                         
-                                         if campos_faltantes:
-                                             st.error(f"❌ Campos faltantes en salida {i+1}: {', '.join(campos_faltantes)}")
-                                             continue
-                                         
-                                         # Validar tipos específicos
-                                         if salida_limpia["cantidad"] <= 0:
-                                             st.error(f"❌ Cantidad inválida en salida {i+1}: {salida_limpia['cantidad']}")
-                                             continue
-                                         
-                                         salidas_para_procesar.append(salida_limpia)
-                                         print(f"✅ Salida {i+1} preparada: {salida_limpia}")
-                                     
-                                     if not salidas_para_procesar:
-                                         st.error("❌ No hay salidas válidas para procesar")
-                                         st.stop()
-                                     
-                                     # MOSTRAR DEBUG PARA ADMIN
-                                     if user_role == "admin":
-                                         with st.expander("🔧 Debug - Datos que se enviarán", expanded=True):
-                                             st.write("**Total de salidas a procesar:**", len(salidas_para_procesar))
-                                             st.write("**Primera salida (ejemplo):**")
-                                             st.json(salidas_para_procesar[0])
-                                             
-                                             # Botón para probar debug endpoint
-                                             if st.button("🧪 Probar Debug Endpoint"):
-                                                 debug_resultado = api._make_request("/salidas/debug", method="POST", data=salidas_para_procesar)
-                                                 st.write("**Resultado del debug:**")
-                                                 st.json(debug_resultado)
-                                                 
-                                                 if debug_resultado:
-                                                     if debug_resultado.get("status") == "success":
-                                                         st.success("✅ Debug exitoso - Los datos están bien formateados")
-                                                     else:
-                                                         st.error("❌ Debug falló - Revisa el formato de datos")
-                                                 
-                                                 st.stop()  # No procesar si solo es debug
-                                     
-                                     # Enviar al endpoint de procesamiento múltiple
-                                     st.info(f"📤 Enviando {len(salidas_para_procesar)} salidas al servidor...")
-                                     
-                                     resultado = api._make_request("/salidas/lote", method="POST", data=salidas_para_procesar)
-                                     
-                                     if resultado:
-                                         exitos = resultado.get('exitos', 0)
-                                         errores = resultado.get('errores', 0)
-                                         total_procesadas = resultado.get('total_procesadas', 0)
-                                         
-                                         if exitos > 0:
-                                             st.success(f"✅ {exitos} de {total_procesadas} salida(s) procesada(s) exitosamente!")
-                                             
-                                             # Mostrar resumen según rol
-                                             if user_role in ["admin", "gerente"]:
-                                                 valor_procesado = sum(item['total'] for item in st.session_state.salidas_carrito)
-                                                 st.info(f"💰 Valor total procesado: ${valor_procesado:,.2f}")
-                                             
-                                             if user_role == "farmaceutico":
-                                                 dispensaciones = len([s for s in st.session_state.salidas_carrito if s['tipo_salida'] == 'Dispensación'])
-                                                 if dispensaciones > 0:
-                                                     st.info(f"⚕️ {dispensaciones} dispensación(es) farmacéutica(s) registrada(s)")
-                                             
-                                             if errores > 0:
-                                                 st.warning(f"⚠️ {errores} salida(s) tuvieron errores")
-                                                 
-                                                 # Mostrar detalles de errores para admin
-                                                 if user_role == "admin":
-                                                     errores_detalle = resultado.get('errores_detalle', [])
-                                                     with st.expander("🔧 Ver detalles de errores"):
-                                                         for error in errores_detalle:
-                                                             st.error(f"Salida #{error.get('index', 'N/A')}: {error.get('error', 'Error desconocido')}")
-                                             
-                                             # Limpiar carrito y cache
-                                             st.session_state.salidas_carrito = []
-                                             clear_cache_inventario()
-                                             st.success("🧹 Carrito limpiado automáticamente")
-                                             st.balloons()
-                                             st.rerun()
-                                         else:
-                                             st.error("❌ No se pudo procesar ninguna salida")
-                                             
-                                             # Mostrar errores detallados
-                                             errores_detalle = resultado.get('errores_detalle', [])
-                                             if errores_detalle:
-                                                 st.error("**Detalles de errores:**")
-                                                 for error in errores_detalle[:3]:  # Mostrar solo los primeros 3 errores
-                                                     st.error(f"• {error.get('error', 'Error desconocido')}")
-                                                 
-                                                 if len(errores_detalle) > 3:
-                                                     st.warning(f"... y {len(errores_detalle) - 3} errores más")
-                                                     
-                                                 # Para admin, mostrar todos los errores
-                                                 if user_role == "admin":
-                                                     with st.expander("🔧 Ver todos los errores (Admin)"):
-                                                         for error in errores_detalle:
-                                                             st.write(f"**Salida #{error.get('index', 'N/A')}:**")
-                                                             st.write(f"- Error: {error.get('error', 'N/A')}")
-                                                             st.write(f"- Datos: {error.get('data', 'N/A')}")
-                                                             st.write("---")
-                                     else:
-                                         st.error("❌ Error conectando con el servidor - Verifique su conexión")
-                                         
-                                 except requests.exceptions.RequestException as e:
-                                     st.error(f"❌ Error de conexión: {str(e)}")
-                                 except ValueError as e:
-                                     st.error(f"❌ Error de validación: {str(e)}")
-                                 except Exception as e:
-                                     st.error(f"❌ Error inesperado: {str(e)}")
-                                     if user_role == "admin":
-                                         st.error(f"🔧 Detalle técnico: {str(e)}")
-                                         
-                                         # Mostrar información del carrito para debug
-                                         with st.expander("🔧 Debug - Contenido del carrito"):
-                                             st.json(st.session_state.salidas_carrito)
-                    else:
-                        st.button("💾 Procesar Todas las Salidas", use_container_width=True, type="primary", disabled=True)
-                
-                with col_btn2:
-                    if st.button("🗑️ Limpiar Carrito", use_container_width=True):
-                        st.session_state.salidas_carrito = []
-                        st.success("🧹 Carrito limpiado")
-                        st.rerun()
-                
-                with col_btn3:
-                    # Selector para eliminar salida específica
-                    if len(st.session_state.salidas_carrito) > 0:
-                        salida_a_eliminar = st.selectbox(
-                            "Eliminar:",
-                            options=range(len(st.session_state.salidas_carrito)),
-                            format_func=lambda x: f"#{x+1}",
-                            key="selector_eliminar_salida"
-                        )
-                        
-                        if st.button("❌", help="Eliminar salida seleccionada"):
-                            st.session_state.salidas_carrito.pop(salida_a_eliminar)
-                            st.success("✅ Salida eliminada del carrito")
-                            st.rerun()
-                
-                # Información adicional según rol
-                if user_role == "farmaceutico" and st.session_state.salidas_carrito:
-                    st.markdown("---")
-                    st.subheader("⚕️ Resumen Farmacéutico")
-                    
-                    col_farm1, col_farm2 = st.columns(2)
-                    
-                    with col_farm1:
-                        dispensaciones = [s for s in st.session_state.salidas_carrito if s['tipo_salida'] == 'Dispensación']
-                        if dispensaciones:
-                            st.markdown("**📋 Dispensaciones Pendientes:**")
-                            for disp in dispensaciones:
-                                receta_info = f" (Receta: {disp.get('numero_receta', 'N/A')})" if disp.get('numero_receta') else ""
-                                st.write(f"• {disp['medicamento_nombre']} - {disp['cantidad']} unidades{receta_info}")
-                    
-                    with col_farm2:
-                        medicamentos_controlados = [s for s in st.session_state.salidas_carrito if s.get('categoria') in ['Antibiótico', 'Cardiovascular']]
-                        if medicamentos_controlados:
-                            st.markdown("**🔒 Medicamentos Controlados:**")
-                            for med in medicamentos_controlados:
-                                st.write(f"• {med['medicamento_nombre']} - Validación requerida")
-                
-                elif user_role in ["admin", "gerente"] and st.session_state.salidas_carrito:
-                    st.markdown("---")
-                    st.subheader("📊 Análisis Gerencial")
-                    
-                    col_ger1, col_ger2, col_ger3 = st.columns(3)
-                    
-                    with col_ger1:
-                        ventas = [s for s in st.session_state.salidas_carrito if s['tipo_salida'] == 'Venta']
-                        if ventas:
-                            valor_ventas = sum(s['total'] for s in ventas)
-                            st.metric("💰 Ventas en Carrito", f"${valor_ventas:,.2f}")
-                    
-                    with col_ger2:
-                        transferencias = [s for s in st.session_state.salidas_carrito if s['tipo_salida'] == 'Transferencia']
-                        st.metric("🔄 Transferencias", len(transferencias))
-                    
-                    with col_ger3:
-                        medicamentos_unicos = len(set(s['medicamento_id'] for s in st.session_state.salidas_carrito))
-                        st.metric("💊 Medicamentos Únicos", medicamentos_unicos)
-            
-            else:
-                st.info("🛒 El carrito está vacío. Selecciona una sucursal, medicamento y lote para agregar salidas.")
-                
-                # Estadísticas personalizadas por rol cuando el carrito está vacío
-                col_stats1, col_stats2 = st.columns(2)
-                
-                with col_stats1:
-                    if user_role == "farmaceutico":
-                        st.markdown("""
-                        **⚕️ Tipos de Salida Farmacéutica:**
-                        - **Dispensación:** Entrega con receta médica
-                        - **Venta:** Medicamentos de venta libre
-                        - **Consumo Interno:** Uso en consultas
-                        - **Devolución:** Retorno por defectos
-                        - **Vencimiento:** Productos caducados
-                        
-                        **📋 Recordatorio:** Todas las dispensaciones requieren validación farmacéutica completa.
-                        """)
-                    elif user_role in ["admin", "gerente"]:
-                        st.markdown("""
-                        **📋 Tipos de Salida Gerencial:**
-                        - **Venta:** Medicamento vendido a cliente
-                        - **Transferencia:** Envío a otra sucursal
-                        - **Consumo Interno:** Uso en la clínica
-                        - **Devolución:** Retorno a proveedor
-                        - **Vencimiento:** Producto caducado
-                        - **Ajuste:** Corrección de inventario
-                        - **Muestra Médica:** Distribución a profesionales
-                        """)
-                    else:
-                        st.markdown("""
-                        **📋 Tipos de Salida Disponibles:**
-                        - **Venta:** Medicamento vendido a cliente
-                        - **Consumo Interno:** Uso en la clínica
-                        
-                        **💡 Nota:** Para otros tipos de salida, consulta con el farmacéutico o gerente.
-                        """)
-                
-                with col_stats2:
-                    # Estadísticas específicas por rol
-                    if user_role in ["admin", "gerente"]:
-                        st.markdown(f"""
-                        **📊 Resumen de Inventario:**
-                        - **Sucursal:** {sucursales_permitidas[0]['nombre'] if len(sucursales_permitidas) == 1 else 'Múltiples disponibles'}
-                        - **Medicamentos disponibles:** {len(medicamentos_disponibles)}
-                        - **Total en stock:** {sum(med.get('stock_actual', 0) for med in medicamentos_disponibles):,} unidades
-                        - **Valor del inventario:** ${sum(med.get('stock_actual', 0) * med.get('precio_venta', 0) for med in medicamentos_disponibles):,.2f}
-                        """)
-                    elif user_role == "farmaceutico":
-                        medicamentos_controlados = len([med for med in medicamentos_disponibles if med.get('categoria') in ['Antibiótico', 'Cardiovascular']])
-                        medicamentos_proximos_vencer = 0  # Se calcularía con lotes
-                        
-                        st.markdown(f"""
-                        **⚕️ Información Farmacéutica:**
-                        - **Sucursal asignada:** {current_user.get('sucursal_nombre', 'N/A')}
-                        - **Medicamentos disponibles:** {len(medicamentos_disponibles)}
-                        - **Medicamentos controlados:** {medicamentos_controlados}
-                        - **Próximos a vencer:** {medicamentos_proximos_vencer}
-                        - **Responsable:** {current_user.get('nombre', 'N/A')}
-                        """)
-                    else:
-                        st.markdown(f"""
-                        **👤 Información del Usuario:**
-                        - **Tu sucursal:** {current_user.get('sucursal_nombre', 'N/A')}
-                        - **Medicamentos disponibles:** {len(medicamentos_disponibles)}
-                        - **Tu rol:** {get_role_description(user_role)}
-                        - **Última actividad:** Hace {datetime.now().strftime('%H:%M')}
-                        """)
-                
-                # Tips específicos por rol
-                if user_role == "farmaceutico":
-                    st.info("💡 **Tip Farmacéutico:** Recuerda aplicar el principio FEFO (First Expire, First Out) al seleccionar lotes")
-                elif user_role in ["admin", "gerente"]:
-                    st.info("💡 **Tip Gerencial:** Monitorea las transferencias para optimizar la distribución entre sucursales")
+                for a, b in rename_candidates.items():
+                    if a in df_prod.columns and b not in df_prod.columns:
+                        df_prod[b] = df_prod[a]
+
+                # Columnas sugeridas para mostrar
+                col_map = {
+                    "id": "ID",
+                    "producto_id": "Producto ID",
+                    "sku": "SKU",
+                    "nombre": "Nombre",
+                    "categoria": "Categoría",
+                    "unidad": "Unidad/Presentación",
+                    "precio_venta": "Precio de venta",
+                    "precio_publico": "Precio público",
+                    "precio": "Precio",
+                    "activo": "Activo",
+                }
+                preferred_cols = ["id", "sku", "nombre", "categoria", "unidad", "precio_venta", "precio_publico", "precio", "activo"]
+                cols_disp = [c for c in preferred_cols if c in df_prod.columns]
+
+                if cols_disp:
+                    df_show = df_prod[cols_disp].copy()
+                    df_show.columns = [col_map.get(c, c) for c in cols_disp]
+                    st.dataframe(df_show, use_container_width=True, hide_index=True)
                 else:
-                    st.info("💡 **Tip:** Consulta siempre con el farmacéutico antes de dispensar medicamentos controlados")
-            
-            # Información adicional de seguridad y trazabilidad
+                    st.info("ℹ️ El catálogo no trae columnas estándar para mostrar (id/sku/nombre/categoria/precio_venta).")
+            else:
+                st.info("ℹ️ Aún no hay productos en el catálogo. Agrega el primero abajo.")
+
             st.markdown("---")
-            st.markdown("### 🔒 Información de Seguridad y Trazabilidad")
-            
-            col_seg1, col_seg2, col_seg3 = st.columns(3)
-            
-            with col_seg1:
-                st.info(f"""
-                **👤 Usuario Activo:**
-                - **Nombre:** {current_user.get('nombre', 'N/A')} {current_user.get('apellido', '')}
-                - **Rol:** {get_role_description(user_role)}
-                - **Sucursal:** {current_user.get('sucursal_nombre', 'N/A')}
-                """)
-            
-            with col_seg2:
-                st.info(f"""
-                **📅 Sesión Actual:**
-                - **Inicio:** {st.session_state.get('login_time', datetime.now()).strftime('%H:%M')}
-                - **Salidas registradas:** {len(st.session_state.salidas_carrito)}
-                - **Estado:** Activa
-                """)
-            
-            with col_seg3:
-                st.info(f"""
-                **🔐 Trazabilidad:**
-                - **Todas las salidas quedan registradas**
-                - **Auditoría completa de movimientos**
-                - **Responsabilidad por usuario**
-                """)
-            
-            # Footer con información legal (para farmacias)
-            if user_role == "farmaceutico":
-                st.markdown("---")
-                st.markdown("""
-                <div style="font-size: 0.8rem; color: #64748b; text-align: center; padding: 1rem; border-top: 1px solid #e2e8f0;">
-                    ⚕️ <strong>Responsabilidad Farmacéutica:</strong> El farmacéutico es responsable de la dispensación adecuada de medicamentos según normativa vigente.<br>
-                    📋 Todas las dispensaciones quedan registradas para auditoría y cumplimiento regulatorio.
-                </div>
-                """, unsafe_allow_html=True)
+            st.subheader("➕ Agregar nuevo producto")
+
+            with st.form("form_producto_nuevo"):
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    sku = st.text_input("SKU *", placeholder="PROD-001", key="prod_sku_new")
+                    nombre = st.text_input("Nombre *", placeholder="Paracetamol 500mg", key="prod_nombre_new")
+
+                with col2:
+                    categoria = st.text_input("Categoría", placeholder="Analgésico", key="prod_categoria_new")
+                    unidad = st.text_input("Unidad/Presentación", placeholder="Caja / Blister / Frasco", key="prod_unidad_new")
+
+                with col3:
+                    precio_venta = st.number_input(
+                        "Precio de venta *",
+                        min_value=0.0,
+                        value=0.0,
+                        step=0.5,
+                        format="%.2f",
+                        key="prod_precio_venta_new",
+                    )
+                    activo = st.checkbox("Activo", value=True, key="prod_activo_new")
+
+                submitted_prod = st.form_submit_button("Guardar producto", type="primary")
+
+            if submitted_prod:
+                errores = []
+                if not sku.strip():
+                    errores.append("SKU es obligatorio.")
+                if not nombre.strip():
+                    errores.append("Nombre es obligatorio.")
+                if float(precio_venta) <= 0:
+                    errores.append("Precio de venta debe ser mayor a 0.")
+
+                if errores:
+                    for e in errores:
+                        st.error(f"❌ {e}")
+                else:
+                    payload = {
+                        "sku": sku.strip(),
+                        "nombre": nombre.strip(),
+                        "categoria": categoria.strip() if categoria else None,
+                        "unidad": unidad.strip() if unidad else None,
+                        "precio_venta": float(precio_venta),
+                        "activo": bool(activo),
+                    }
+
+                    created = None
+                    try:
+                        created = _post_producto(payload)
+                    except Exception:
+                        created = None
+
+                    if created:
+                        st.success("✅ Producto creado en el backend.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        # Fallback local
+                        new_local_id = int(time.time())
+                        st.session_state.productos_local.append({
+                            "id": new_local_id,
+                            **payload,
+                            "_local_only": True,
+                        })
+                        st.warning("⚠️ Backend aún no soporta creación. Producto guardado en modo demo (local).")
+                        st.rerun()
+
+            st.markdown("---")
+            st.subheader("✏️ Actualizar precio de producto")
+
+            # Selector por ID
+            prod_candidates = [p for p in productos_all if isinstance(p, dict) and p.get("id") is not None]
+            if prod_candidates:
+                label_to_prod = {}
+                for p in prod_candidates:
+                    pid = p.get("id")
+                    label = f"{pid} - {p.get('sku', 'SKU')} - {p.get('nombre', 'Sin nombre')}"
+                    label_to_prod[label] = p
+
+                sel_label = st.selectbox("Selecciona un producto", options=list(label_to_prod.keys()), key="prod_sel_update_price")
+                prod_sel = label_to_prod.get(sel_label) or {}
+                prod_sel_id = int(prod_sel.get("id"))
+                precio_actual = safe_float(prod_sel.get("precio_venta", prod_sel.get("precio_publico", prod_sel.get("precio", 0))), 0.0)
+
+                colp1, colp2 = st.columns([2, 1])
+                with colp1:
+                    nuevo_precio = st.number_input(
+                        "Nuevo precio de venta",
+                        min_value=0.0,
+                        value=float(precio_actual),
+                        step=0.5,
+                        format="%.2f",
+                        key="prod_new_price",
+                    )
+                with colp2:
+                    guardar = st.button("Guardar precio", use_container_width=True, type="primary", key="prod_save_price")
+
+                if guardar:
+                    if float(nuevo_precio) <= 0:
+                        st.error("❌ El precio debe ser mayor a 0.")
+                    else:
+                        updated = None
+                        try:
+                            updated = _update_precio(prod_sel_id, float(nuevo_precio))
+                        except Exception:
+                            updated = None
+
+                        if updated:
+                            st.success("✅ Precio actualizado en el backend.")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            # Fallback local (override)
+                            updated_local = False
+                            for p in st.session_state.productos_local:
+                                if int(p.get("id", 0)) == int(prod_sel_id):
+                                    p["precio_venta"] = float(nuevo_precio)
+                                    updated_local = True
+                                    break
+
+                            if not updated_local:
+                                st.session_state.productos_local.append({
+                                    "id": int(prod_sel_id),
+                                    "sku": prod_sel.get("sku"),
+                                    "nombre": prod_sel.get("nombre"),
+                                    "categoria": prod_sel.get("categoria"),
+                                    "unidad": prod_sel.get("unidad"),
+                                    "precio_venta": float(nuevo_precio),
+                                    "activo": prod_sel.get("activo", True),
+                                    "_override_local": True,
+                                })
+
+                            st.warning("⚠️ Backend aún no soporta actualización. Precio guardado en modo demo (local).")
+                            st.rerun()
+            else:
+                st.info("ℹ️ No hay productos seleccionables (faltan IDs).")
+
+
+
+# ========== TAB 9: PROMOCIONES (SOLO ADMIN) ==========
+if tab_mapping[8] is not None:  # Si la pestaña está disponible
+    with tab_mapping[8]:
+        # Verificar permisos específicos
+        if not user_has("promociones.manage"):
+            st.error("🚫 No tienes permisos para gestionar promociones.")
+        else:
+            st.header("🏷️ Promociones (Admin)")
+            st.markdown(
+                "Crea promociones para aplicar descuentos automáticos en ventas. "
+                "**MVP:** descuento por producto (porcentaje) y reglas simples."
+            )
+
+            if user_role == "admin":
+                st.success("👑 **Modo Administrador** - Gestión de promociones y descuentos automáticos")
+
+            # =======================
+            # Helpers
+            # =======================
+            def _get_promos():
+                data = api._make_request("/promociones")
+                return data if isinstance(data, list) else None
+
+            def _post_promo(payload: dict):
+                created = api._make_request("/promociones", method="POST", data=payload)
+                return created
+
+            # Estado local (fallback)
+            if "promociones" not in st.session_state:
+                st.session_state.promociones = []
+
+            promos_api = _get_promos()
+            if isinstance(promos_api, list):
+                promos_all = promos_api
+            else:
+                promos_all = st.session_state.promociones
+
+            # Catálogo para selector (id + nombre)
+            productos_api = api._make_request("/productos")
+            if not isinstance(productos_api, list) or len(productos_api) == 0:
+                productos_api = api._make_request("/medicamentos") or []
+            productos_local = st.session_state.get("productos_local", [])
+
+            productos_all = []
+            if isinstance(productos_api, list):
+                productos_all.extend(productos_api)
+            productos_all.extend(productos_local)
+
+            prod_label_to_id = {}
+            for p in productos_all:
+                pid = p.get("id")
+                if pid is None:
+                    continue
+                label = f"{p.get('sku', 'SKU')} - {p.get('nombre', 'Sin nombre')}"
+                prod_label_to_id[label] = int(pid)
+
+            st.subheader("📋 Promociones activas/configuradas")
+
+            if not promos_all:
+                st.info("ℹ️ Aún no hay promociones. Crea la primera abajo.")
+            else:
+                df_promos = pd.DataFrame(promos_all)
+
+                # Normalización de columnas comunes
+                if "producto_ids" not in df_promos.columns and "productos" in df_promos.columns:
+                    df_promos["producto_ids"] = df_promos["productos"]
+
+                st.dataframe(df_promos, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("➕ Crear promoción")
+
+            with st.form("form_promo_nueva"):
+                col1, col2, col3 = st.columns([2, 1, 1])
+
+                with col1:
+                    promo_nombre = st.text_input(
+                        "Nombre de la promoción *",
+                        placeholder="Descuento Paracetamol / Promo fin de semana",
+                        key="promo_nombre_new"
+                    )
+                    promo_activa = st.checkbox("Activa", value=True, key="promo_activa_new")
+
+                with col2:
+                    descuento_pct = st.number_input(
+                        "Descuento (%) *",
+                        min_value=0.0,
+                        max_value=100.0,
+                        value=10.0,
+                        step=1.0,
+                        format="%.0f",
+                        key="promo_desc_pct_new",
+                    )
+
+                with col3:
+                    min_cantidad = st.number_input(
+                        "Cantidad mínima",
+                        min_value=1,
+                        value=1,
+                        step=1,
+                        key="promo_min_qty_new",
+                        help="Para MVP: aplica el descuento si compras al menos esta cantidad del producto.",
+                    )
+
+                productos_sel_labels = st.multiselect(
+                    "Productos aplicables *",
+                    options=list(prod_label_to_id.keys()),
+                    key="promo_productos_new",
+                    help="Selecciona 1 o más productos a los que se aplicará el descuento.",
+                )
+
+                submitted_promo = st.form_submit_button("Guardar promoción", type="primary")
+
+            if submitted_promo:
+                errores = []
+                if not promo_nombre.strip():
+                    errores.append("Nombre es obligatorio.")
+                if float(descuento_pct) <= 0:
+                    errores.append("El descuento debe ser mayor a 0%.")
+                if not productos_sel_labels:
+                    errores.append("Debes seleccionar al menos 1 producto.")
+
+                if errores:
+                    for e in errores:
+                        st.error(f"❌ {e}")
+                else:
+                    producto_ids = [int(prod_label_to_id[l]) for l in productos_sel_labels]
+                    payload = {
+                        "nombre": promo_nombre.strip(),
+                        "producto_ids": producto_ids,
+                        "descuento_pct": float(descuento_pct),
+                        "min_cantidad": int(min_cantidad),
+                        "activa": bool(promo_activa),
+                    }
+
+                    created = None
+                    try:
+                        created = _post_promo(payload)
+                    except Exception:
+                        created = None
+
+                    if created:
+                        st.success("✅ Promoción guardada en el backend.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.session_state.promociones.append(payload)
+                        st.success("✅ Promoción guardada (session). Se aplicará automáticamente en Ventas.")
+                        st.rerun()
+
+            st.markdown("---")
+            st.subheader("🧹 Mantenimiento rápido")
+
+            if promos_all:
+                colm1, colm2 = st.columns(2)
+                with colm1:
+                    if st.button("Desactivar todas", use_container_width=True, key="promo_disable_all"):
+                        if isinstance(promos_api, list):
+                            st.warning("⚠️ Desactivar masivo en backend no implementado aún. (MVP)")
+                        else:
+                            for p in st.session_state.promociones:
+                                p["activa"] = False
+                            st.success("✅ Todas desactivadas.")
+                            st.rerun()
+
+                with colm2:
+                    if st.button("Eliminar todas", use_container_width=True, key="promo_delete_all"):
+                        if isinstance(promos_api, list):
+                            st.warning("⚠️ Eliminación masiva en backend no implementada aún. (MVP)")
+                        else:
+                            st.session_state.promociones = []
+                            st.success("✅ Todas eliminadas.")
+                            st.rerun()
+
 
 # ========== FOOTER CORPORATIVO CÓDICE INVENTORY ==========
 st.markdown("---")
